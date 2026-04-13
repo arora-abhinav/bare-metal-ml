@@ -1,41 +1,19 @@
-# Prerequisites
-*.d
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv
+env/
+venv/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
 
-# Precompiled Headers
-*.gch
-*.pch
+# macOS
+.DS_Store
 
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# debug information files
-*.dwo
+# IDE
+.vscode/
+.idea/

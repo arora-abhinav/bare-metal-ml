@@ -20,3 +20,4 @@ venv/
 
 # Excluded directories
 Machine Learning Framework/
+.claude/

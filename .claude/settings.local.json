@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /tmp/bare-metal-ml/python /tmp/bare-metal-ml/datasets)",
+      "Bash(cp \"/Users/abhinavarora/Desktop/Machine Learning/GDA/GDA.ipynb\" /tmp/bare-metal-ml/python/GDA.ipynb)",
+      "Bash(cp \"/Users/abhinavarora/Desktop/Machine Learning/Naive Bayes /NaiveBayes.ipynb\" /tmp/bare-metal-ml/python/GaussianNaiveBayes.ipynb)",
+      "Bash(cp \"/Users/abhinavarora/Desktop/Machine Learning/Logistic Regression/logistic-regression.ipynb\" /tmp/bare-metal-ml/python/LogisticRegression.ipynb)",
+      "Bash(cp \"/Users/abhinavarora/Desktop/Machine Learning/Linear Regression/l_regression.ipynb\" /tmp/bare-metal-ml/python/LinearRegression.ipynb)"
+    ]
+  }
+}

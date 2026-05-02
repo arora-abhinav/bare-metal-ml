@@ -1,6 +1,4 @@
 import re
-
-
 #This script contains all the utility functions that are common across the bernoulli naive bayes implementation 
 #as well as the multinomial naive bayes implementation of a spam classifier
 #Function to tokenize
@@ -48,3 +46,22 @@ def calculate_class_ratio(training_y):
             m[training_y[i]] += 1
     
     return m
+
+#Creating vectorized inputs for each training example in x_train
+#Inout matrix takes in the original training examples to be vectorized
+#vocab_size is the size of the vocab list
+#train tokens are the tokens split using re
+#vocab list is the vocab list built using the build vocab_list function
+#count is a boolean that says to keep a counter of the word count or just a
+#simple flag (counter for multinomial and flag for Bernoulli)
+def vectorize(input_matrix, vocab_size, tokens, vocab_list, count):
+    vectorized_inputs = [[0] * vocab_size for _ in range(len(input_matrix))]
+    for i in range(len(input_matrix)):
+        for token in tokens[i]:
+            if token in vocab_list:
+                if not count:
+                    vectorized_inputs[i][vocab_list[token]] = 1
+                else:
+                    vectorized_inputs[i][vocab_list[token]] += 1
+        
+    return vectorized_inputs

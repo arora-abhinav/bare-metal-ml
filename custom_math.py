@@ -99,7 +99,7 @@ def matrix_product_with_matrix_and_vector(matrix, vector, row, col):
         for j in range(row):
             mat[j][i] = matrix[j][i] * vector[i]
 
-    return sum_across_column(matrix)
+    return sum_across_column(mat)
 
 
 def scalar_product_from_transpose_and_vector(v1, v2, dimension):

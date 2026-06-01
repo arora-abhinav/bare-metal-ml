@@ -95,18 +95,11 @@ def matrix_inverse(lower, upper, dimension):
 #Calculating the product of a matrix and vector 
 def matrix_product_with_matrix_and_vector(matrix, vector, row, col):
     mat = [[0] * col for _ in range(row)]
-    res = [0] * row
     for i in range(col):
         for j in range(row):
             mat[j][i] = matrix[j][i] * vector[i]
-    
-    for k in range(row):
-        row_sum = 0
-        for l in range(col):
-            row_sum += mat[k][l]
-        res[k] = row_sum
-    
-    return res
+
+    return sum_across_column(matrix)
 
 
 def scalar_product_from_transpose_and_vector(v1, v2, dimension):
@@ -138,6 +131,7 @@ def matrix_with_matrix_multiplication(matrix_one, matrix_two):
     #Therefore, the transpose must be returned
     return transpose_matrix(res)
 
+#Calculates the transpose of the matrix
 def transpose_matrix(matrix):
     #Shape of the transposed matrix
     res = [[0] * len(matrix) for _ in range(len(matrix[0]))]
@@ -147,9 +141,41 @@ def transpose_matrix(matrix):
     
     return res
 
+#Applies the activation function to each element in the matrix
 def element_wise_activation(matrix, activation_function):
     for row in range(len(matrix)):
         for col in range(len(matrix[0])):
             matrix[row][col] = activation_function(matrix[row][col])
     
     return matrix
+
+#Sums all the elements on the same row
+def sum_across_column(matrix):
+    res = [0] * len(matrix)
+    for k in range(len(matrix)):
+        row_sum = 0
+        for l in range(len(matrix[0])):
+            row_sum += matrix[k][l]
+        res[k] = row_sum
+    
+    return res
+
+#Multiples a scalar with a matrix
+def scalar_multiply_matrix(matrix, scalar):
+    for row in range(len(matrix)):
+        for col in range(len(matrix[0])):
+            matrix[row][col] *= scalar
+    
+    return matrix
+
+#Matrix addition and subtraction
+def matrix_addition_and_sub(matrix_one, matrix_two, operation):
+    res = [[0] * len(matrix_one[0]) for _ in range(len(matrix_one))]
+    for row in range(len(matrix_one)):
+        for col in range(len(matrix_two)):
+            if operation == "add":
+                res[row][col] = matrix_one[row][col] + matrix_two[row][col]
+            else:
+                res[row][col] = matrix_one[row][col] - matrix_two[row][col]
+    
+    return res

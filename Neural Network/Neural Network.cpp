@@ -3,16 +3,15 @@
 #include <string>
 #include <random>
 #include <functional>
-#include <limits>
 #include <fstream>
 #include <iostream>
 #include <algorithm>
 #include <numeric>
 #include <cstdint>
+#include <sstream>
 #include "../custom_math.cpp"
 
 using namespace std;
-
 typedef vector<double> Vec;
 typedef vector<vector<double>> Mat;
 
@@ -44,17 +43,22 @@ public:
 
     double ReLU(double input_val) {
         if (input_val > 0) return input_val;
-        return 0.0;
+        return 0.01 * input_val;
     }
 };
 
 enum class FunctionType { RELU, SIGMOID };
 
+//This is a layer of neurons with specific number of neurons that is a hyper parameter
+//As well as the number of inputs this layer will take
 class Layer {
 public:
     FunctionType function_type;
     int neuron_num;
     int input_size;
+    //Generates a random number in the normal distribution with mean 0 and std 0.01. This results in values between
+    //-0.03 and 0.03. This is required since we want to break symmetry in each layer of a neural network and not
+    //make them identical
     Mat parameters;
     Mat bias;
     //Linear part and result of the activation being stored directly as a property of the layer itself
@@ -66,11 +70,11 @@ public:
         this->neuron_num = neuron_num;
         this->input_size = input_size;
 
-        //Generates a random number in the normal distribution with mean 0 and std 0.01. This results in values between
-        //-0.03 and 0.03. This is required since we want to break symmetry in each layer of a neural network and not
-        //make them identical
         static mt19937 gen(random_device{}());
-        static normal_distribution<double> gauss(0.0, 0.01);
+        //He initialization: std = sqrt(2 / fan_in). This keeps activation variance stable
+        //across layers with ReLU, preventing the signal from collapsing to near-zero
+        double he_std = sqrt(2.0 / input_size);
+        normal_distribution<double> gauss(0.0, he_std);
 
         parameters.resize(neuron_num, Vec(input_size));
         for (int i = 0; i < neuron_num; i++) {
@@ -98,7 +102,7 @@ public:
     Mat linearize(Mat parameters, Mat input, Mat bias) {
         Mat parameter_input_product = matrix_with_matrix_multiplication(parameters, input);
         //Broadcast
-        //This is the number of columns of the result, which equals the number of training examples
+        //This is the number of rows of the broadcasted bias matrix
         int dimension = parameter_input_product[0].size();
         Mat broadcasted_matrix(parameter_input_product.size(), Vec(dimension, 0.0));
         for (int row = 0; row < (int)broadcasted_matrix.size(); row++) {
@@ -150,7 +154,7 @@ public:
         return vector_copy;
     }
 
-    //This is the cross entropy function required.
+    //This is the cross entropy function required
     //y_hat is the final prediction vector and y is the actual label vector
     double cross_entropy_loss(Vec y_hat, Vec y) {
         Vec regularised_predictions = regularise(y_hat);
@@ -181,7 +185,7 @@ public:
             if (i == 0) {
                 layers.push_back(Layer(neurons_in_layers[i], initial_input.size(), function_type));
             }
-            //For the other layers, the input size is the number of neurons of the previous layer since each neuron outputs a single number
+            //For the other layers, the input size the number of neurons of the previous layer since each neuron outputs a single number
             else {
                 layers.push_back(Layer(neurons_in_layers[i], neurons_in_layers[i - 1], function_type));
             }
@@ -195,6 +199,7 @@ public:
         if (layer_index >= (int)layers.size()) return;
         Layer& layer = layers[layer_index];
         Mat linear_res = layer.linearize(layer.parameters, input, layer.bias);
+        layer.z = linear_res;
         Mat output;
         if (layer_index == (int)layers.size() - 1) {
             output = layer.hypothesis(linear_res, true);
@@ -208,7 +213,7 @@ public:
         feedforward(layer_index + 1, output);
     }
 
-    //The total loss function is the average of the loss functions across all training examples.
+    //The total loss function is the sum of the loss functions across each layer.
     //The output is the output of the final layer
     double total_loss(Mat output, function<double(Vec, Vec)> loss_type, Mat input_labels) {
         double total = 0.0;
@@ -245,13 +250,18 @@ public:
     }
 
     //This is the general pattern for the backprop for previous layers.
-    pair<Mat, Mat> previous_layer_backprop(Layer& current_layer, Layer& next_layer, Mat previous_product, Layer* previous_layer = nullptr) {
+    pair<Mat, Mat> previous_layer_backprop(Layer& current_layer, Layer& next_layer, Mat previous_product, FunctionType activation, Layer* previous_layer = nullptr) {
         Mat next_layer_parameter_transpose = transpose_matrix(next_layer.parameters);
         Mat multiplied_term_one = matrix_with_matrix_multiplication(next_layer_parameter_transpose, previous_product);
         Mat product_one = element_wise_multiplication(multiplied_term_one, current_layer.a);
-        Mat matrix_of_ones(current_layer.a.size(), Vec(current_layer.a[0].size(), 1.0));
-        Mat one_minus_a = matrix_addition_and_sub(matrix_of_ones, current_layer.a, "sub");
-        Mat product_two = element_wise_multiplication(product_one, one_minus_a);
+        Mat product_two;
+        if (activation == FunctionType::SIGMOID) {
+            Mat matrix_of_ones(current_layer.a.size(), Vec(current_layer.a[0].size(), 1.0));
+            Mat term = matrix_addition_and_sub(matrix_of_ones, current_layer.a, "sub");
+            product_two = element_wise_multiplication(product_one, term);
+        } else if (activation == FunctionType::RELU) {
+            product_two = element_wise_multiplication(multiplied_term_one, ReLU_derivative(current_layer.z));
+        }
         Mat previous_layer_activation_transpose;
         if (previous_layer != nullptr) {
             previous_layer_activation_transpose = transpose_matrix(previous_layer->a);
@@ -298,8 +308,8 @@ public:
 
             for (int i = (int)layers.size() - 2; i >= 0; i--) {
                 auto [res, new_backprop_prod] = (i > 0) ?
-                    previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, &layers[i - 1]) :
-                    previous_layer_backprop(layers[i], layers[i + 1], backprop_prod);
+                    previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type, &layers[i - 1]) :
+                    previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type);
                 backprop_prod = new_backprop_prod;
 
                 Mat bias_grad(backprop_prod.size(), Vec(1, 0.0));
@@ -320,6 +330,78 @@ public:
                 layers[i].bias = matrix_addition_and_sub(layers[i].bias, with_learning_rate_bias, "sub");
             }
         }
+    }
+
+    //Saves each layer's weights and biases to CSV files in the given folder.
+    //Format: weights_layer_i.csv (one row per neuron) and bias_layer_i.csv (one value per row)
+    void save_weights(string folder) {
+        for (int i = 0; i < (int)layers.size(); i++) {
+            ofstream wf(folder + "/weights_layer_" + to_string(i) + ".csv");
+            for (int row = 0; row < (int)layers[i].parameters.size(); row++) {
+                for (int col = 0; col < (int)layers[i].parameters[0].size(); col++) {
+                    wf << layers[i].parameters[row][col];
+                    if (col < (int)layers[i].parameters[0].size() - 1) wf << ",";
+                }
+                wf << "\n";
+            }
+            wf.close();
+
+            ofstream bf(folder + "/bias_layer_" + to_string(i) + ".csv");
+            for (int row = 0; row < (int)layers[i].bias.size(); row++) {
+                bf << layers[i].bias[row][0] << "\n";
+            }
+            bf.close();
+        }
+        cout << "Weights saved to " << folder << endl;
+    }
+
+    //Loads weights and biases from CSV files previously saved by save_weights.
+    void load_weights(string folder) {
+        for (int i = 0; i < (int)layers.size(); i++) {
+            ifstream wf(folder + "/weights_layer_" + to_string(i) + ".csv");
+            string line;
+            int row = 0;
+            while (getline(wf, line)) {
+                stringstream ss(line);
+                string val;
+                int col = 0;
+                while (getline(ss, val, ',')) {
+                    layers[i].parameters[row][col] = stod(val);
+                    col++;
+                }
+                row++;
+            }
+            wf.close();
+
+            ifstream bf(folder + "/bias_layer_" + to_string(i) + ".csv");
+            row = 0;
+            while (getline(bf, line)) {
+                layers[i].bias[row][0] = stod(line);
+                row++;
+            }
+            bf.close();
+        }
+        cout << "Weights loaded from " << folder << endl;
+    }
+
+    //Runs a forward pass on x_test and returns the percentage of correctly classified examples.
+    //The predicted class is the argmax of each output column, same for the actual label.
+    double test_accuracy(Mat x_test, Mat y_test) {
+        feedforward(0, x_test);
+        Mat output = layers.back().a;
+        int correct = 0;
+        for (int col = 0; col < (int)output[0].size(); col++) {
+            int pred = 0;
+            for (int row = 1; row < (int)output.size(); row++) {
+                if (output[row][col] > output[pred][col]) pred = row;
+            }
+            int actual = 0;
+            for (int row = 1; row < (int)y_test.size(); row++) {
+                if (y_test[row][col] > y_test[actual][col]) actual = row;
+            }
+            if (pred == actual) correct++;
+        }
+        return (double)correct / output[0].size() * 100.0;
     }
 };
 
@@ -351,9 +433,9 @@ int main(int argc, char** argv) {
     Mat image_input_matrix(img_dimension, Vec(num, 0.0));
 
     for (int column = 0; column < (int)num; column++) {
-        for (int row = 0; row < (int)(rows * cols); row++) {
+        for (int row = 0; row < img_dimension; row++) {
             //Normalizing to fit every value between 0 and 1 to solve vanishing gradients
-            image_input_matrix[row][column] = raw_images[column * (rows * cols) + row] / 255.0;
+            image_input_matrix[row][column] = raw_images[column * img_dimension + row] / 255.0;
         }
     }
 
@@ -373,28 +455,28 @@ int main(int argc, char** argv) {
     Mat x_train(image_input_matrix.size(), Vec(train_size, 0.0));
     Mat x_test(image_input_matrix.size(), Vec(test_indices.size(), 0.0));
     for (int row = 0; row < (int)image_input_matrix.size(); row++) {
-        for (int i = 0; i < train_size; i++) {
+        for (int i = 0; i < train_size; i++)
             x_train[row][i] = image_input_matrix[row][train_indices[i]];
-        }
-        for (int i = 0; i < (int)test_indices.size(); i++) {
+        for (int i = 0; i < (int)test_indices.size(); i++)
             x_test[row][i] = image_input_matrix[row][test_indices[i]];
-        }
     }
 
     //Split labels the same way
     Mat y_train(vectorized_labels.size(), Vec(train_size, 0.0));
     Mat y_test(vectorized_labels.size(), Vec(test_indices.size(), 0.0));
     for (int row = 0; row < (int)vectorized_labels.size(); row++) {
-        for (int i = 0; i < train_size; i++) {
+        for (int i = 0; i < train_size; i++)
             y_train[row][i] = vectorized_labels[row][train_indices[i]];
-        }
-        for (int i = 0; i < (int)test_indices.size(); i++) {
+        for (int i = 0; i < (int)test_indices.size(); i++)
             y_test[row][i] = vectorized_labels[row][test_indices[i]];
-        }
     }
 
-    Network MNIST_Network(4, {784, 128, 64, 10}, x_train, FunctionType::SIGMOID);
-    MNIST_Network.train_loop(1000, 1, y_train);
+    Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU);
+    MNIST_Network.train_loop(2000, 0.1, y_train);
+    MNIST_Network.save_weights("weights");
+
+    double accuracy = MNIST_Network.test_accuracy(x_test, y_test);
+    cout << "Test accuracy: " << accuracy << "%" << endl;
 
     return 0;
 }

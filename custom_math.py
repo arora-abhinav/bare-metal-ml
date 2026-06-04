@@ -179,3 +179,11 @@ def matrix_addition_and_sub(matrix_one, matrix_two, operation):
                 res[row][col] = matrix_one[row][col] - matrix_two[row][col]
     
     return res
+
+def element_wise_multiplication(matrix_one, matrix_two):
+    res = [[0] * len(matrix_one[0]) for _ in range(len(matrix_one))]
+    for row in range(len(matrix_one)):
+        for col in range(len(matrix_one[0])):
+            res[row][col] = matrix_one[row][col] * matrix_two[row][col]
+    
+    return res

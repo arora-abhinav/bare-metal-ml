@@ -187,3 +187,12 @@ def element_wise_multiplication(matrix_one, matrix_two):
             res[row][col] = matrix_one[row][col] * matrix_two[row][col]
     
     return res
+
+
+def ReLU_derivative(matrix):
+    res = [[0] * len(matrix[0]) for _ in range(len(matrix))]
+    for row in range(len(matrix)):
+        for col in range(len(matrix[0])):
+            res[row][col] = 1 if matrix[row][col] > 0 else 0
+        
+    return res

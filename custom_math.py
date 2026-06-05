@@ -196,3 +196,19 @@ def ReLU_derivative(matrix):
             res[row][col] = 1 if matrix[row][col] > 0 else 0
         
     return res
+
+def element_wise_roots(matrix, root_of):
+    res = [[0] * len(matrix[0]) for _ in range(len(matrix))]
+    for row in range(len(matrix)):
+        for col in range(len(matrix[0])):
+            res[row][col] = (matrix[row][col])^(1/root_of)
+    
+    return res
+
+def element_wise_division_two_matrices(matrix_one, matrix_two):
+    res = [[0] * len(matrix_one[0]) for _ in range(len(matrix_one))]
+    for row in range(len(matrix_one)):
+        for col in range(len(matrix_one[0])):
+            res[row][col] = matrix_one[row][col]/matrix_two[row][col]
+
+    return res

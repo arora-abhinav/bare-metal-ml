@@ -219,6 +219,7 @@ public:
     Mat initial_input;
     vector<Layer> layers;
     Optimizer* optimizer;
+    Mat current_batch;
 
     Network(int layer_num, vector<int> neurons_in_layers, Mat initial_input, FunctionType function_type, Optimizer* optimizer) {
         this->number_of_layers = layer_num;
@@ -259,7 +260,7 @@ public:
     pair<Mat, Mat> last_layer_backprop(Mat labels, Layer& final_layer, Layer* prev_layer = nullptr) {
         Mat prev_act_T = (prev_layer != nullptr)
             ? transpose_matrix(prev_layer->a)
-            : transpose_matrix(initial_input);
+            : transpose_matrix(current_batch);
         Mat term_one = matrix_addition_and_sub(labels, final_layer.a, "sub");
         Mat final_prod = matrix_with_matrix_multiplication(term_one, prev_act_T);
         Mat res = scalar_multiply_matrix(final_prod, -1.0 / labels[0].size());
@@ -281,52 +282,74 @@ public:
         }
         Mat prev_act_T = (previous_layer != nullptr)
             ? transpose_matrix(previous_layer->a)
-            : transpose_matrix(initial_input);
+            : transpose_matrix(current_batch);
         Mat res = matrix_with_matrix_multiplication(product_two, prev_act_T);
         return {res, product_two};
     }
 
-    void train_loop(int epochs, Mat train_labels) {
+    void train_loop(int epochs, Mat train_labels, int batch_size) {
         LossFunctions loss_fn;
+        int num_examples = initial_input[0].size();
+        static mt19937 rng(random_device{}());
+
         for (int epoch = 0; epoch < epochs; epoch++) {
-            feedforward(0, initial_input);
-            double current_loss = total_loss(layers.back().a, [&](Vec y_hat, Vec y) {
-                return loss_fn.cross_entropy_loss(y_hat, y);
-            }, train_labels);
-            cout << "Epoch " << epoch << ", Loss: " << current_loss << endl;
+            vector<int> indices(num_examples);
+            iota(indices.begin(), indices.end(), 0);
+            shuffle(indices.begin(), indices.end(), rng);
 
-            vector<Mat> weight_results(layers.size());
-            vector<Mat> bias_results(layers.size());
+            int num_batches = num_examples / batch_size;
+            for (int b = 0; b < num_batches; b++) {
+                int start = b * batch_size;
 
-            auto [last_w, backprop_prod] = (layers.size() > 1)
-                ? last_layer_backprop(train_labels, layers.back(), &layers[layers.size() - 2])
-                : last_layer_backprop(train_labels, layers.back());
+                // Select batch columns from input and labels
+                current_batch = Mat(initial_input.size(), Vec(batch_size, 0.0));
+                Mat batch_labels(train_labels.size(), Vec(batch_size, 0.0));
+                for (int row = 0; row < (int)initial_input.size(); row++)
+                    for (int j = 0; j < batch_size; j++)
+                        current_batch[row][j] = initial_input[row][indices[start + j]];
+                for (int row = 0; row < (int)train_labels.size(); row++)
+                    for (int j = 0; j < batch_size; j++)
+                        batch_labels[row][j] = train_labels[row][indices[start + j]];
 
-            weight_results.back() = last_w;
-            Mat last_bias_grad(backprop_prod.size(), Vec(1, 0.0));
-            for (int row = 0; row < (int)backprop_prod.size(); row++) {
-                double s = 0.0;
-                for (double val : backprop_prod[row]) s += val;
-                last_bias_grad[row][0] = s;
-            }
-            bias_results.back() = last_bias_grad;
+                feedforward(0, current_batch);
+                double current_loss = total_loss(layers.back().a, [&](Vec y_hat, Vec y) {
+                    return loss_fn.cross_entropy_loss(y_hat, y);
+                }, batch_labels);
+                cout << "Epoch " << epoch << ", Batch " << b << ", Loss: " << current_loss << endl;
 
-            for (int i = (int)layers.size() - 2; i >= 0; i--) {
-                auto [res, new_prod] = (i > 0)
-                    ? previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type, &layers[i - 1])
-                    : previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type);
-                backprop_prod = new_prod;
-                Mat bias_grad(backprop_prod.size(), Vec(1, 0.0));
+                vector<Mat> weight_results(layers.size());
+                vector<Mat> bias_results(layers.size());
+
+                auto [last_w, backprop_prod] = (layers.size() > 1)
+                    ? last_layer_backprop(batch_labels, layers.back(), &layers[layers.size() - 2])
+                    : last_layer_backprop(batch_labels, layers.back());
+
+                weight_results.back() = last_w;
+                Mat last_bias_grad(backprop_prod.size(), Vec(1, 0.0));
                 for (int row = 0; row < (int)backprop_prod.size(); row++) {
                     double s = 0.0;
                     for (double val : backprop_prod[row]) s += val;
-                    bias_grad[row][0] = s;
+                    last_bias_grad[row][0] = s;
                 }
-                bias_results[i] = bias_grad;
-                weight_results[i] = res;
-            }
+                bias_results.back() = last_bias_grad;
 
-            optimizer->update(layers, weight_results, bias_results);
+                for (int i = (int)layers.size() - 2; i >= 0; i--) {
+                    auto [res, new_prod] = (i > 0)
+                        ? previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type, &layers[i - 1])
+                        : previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type);
+                    backprop_prod = new_prod;
+                    Mat bias_grad(backprop_prod.size(), Vec(1, 0.0));
+                    for (int row = 0; row < (int)backprop_prod.size(); row++) {
+                        double s = 0.0;
+                        for (double val : backprop_prod[row]) s += val;
+                        bias_grad[row][0] = s;
+                    }
+                    bias_results[i] = bias_grad;
+                    weight_results[i] = res;
+                }
+
+                optimizer->update(layers, weight_results, bias_results);
+            }
         }
     }
 
@@ -344,50 +367,6 @@ public:
             if (pred == actual) correct++;
         }
         return (double)correct / output[0].size() * 100.0;
-    }
-
-    void save_weights(string folder) {
-        for (int i = 0; i < (int)layers.size(); i++) {
-            ofstream wf(folder + "/weights_layer_" + to_string(i) + ".csv");
-            for (int row = 0; row < (int)layers[i].parameters.size(); row++) {
-                for (int col = 0; col < (int)layers[i].parameters[0].size(); col++) {
-                    wf << layers[i].parameters[row][col];
-                    if (col < (int)layers[i].parameters[0].size() - 1) wf << ",";
-                }
-                wf << "\n";
-            }
-            wf.close();
-
-            ofstream bf(folder + "/bias_layer_" + to_string(i) + ".csv");
-            for (int row = 0; row < (int)layers[i].bias.size(); row++)
-                bf << layers[i].bias[row][0] << "\n";
-            bf.close();
-        }
-        cout << "Weights saved to " << folder << endl;
-    }
-
-    void load_weights(string folder) {
-        for (int i = 0; i < (int)layers.size(); i++) {
-            ifstream wf(folder + "/weights_layer_" + to_string(i) + ".csv");
-            string line;
-            int row = 0;
-            while (getline(wf, line)) {
-                stringstream ss(line);
-                string val;
-                int col = 0;
-                while (getline(ss, val, ','))
-                    layers[i].parameters[row][col++] = stod(val);
-                row++;
-            }
-            wf.close();
-
-            ifstream bf(folder + "/bias_layer_" + to_string(i) + ".csv");
-            row = 0;
-            while (getline(bf, line))
-                layers[i].bias[row++][0] = stod(line);
-            bf.close();
-        }
-        cout << "Weights loaded from " << folder << endl;
     }
 };
 
@@ -419,7 +398,7 @@ int main(int argc, char** argv) {
             image_input_matrix[row][column] = raw_images[column * img_dimension + row] / 255.0;
 
     int num_examples = image_input_matrix[0].size();
-    int train_size = (int)(0.8 * num_examples);
+    int train_size = (int)(0.666666 * num_examples);
 
     vector<int> indices(num_examples);
     iota(indices.begin(), indices.end(), 0);
@@ -449,8 +428,7 @@ int main(int argc, char** argv) {
 
     Adam adam(0.001);
     Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU, &adam);
-    MNIST_Network.train_loop(2000, y_train);
-    MNIST_Network.save_weights("weights");
+    MNIST_Network.train_loop(30, y_train, 256);
 
     double accuracy = MNIST_Network.test_accuracy(x_test, y_test);
     cout << "Test accuracy: " << accuracy << "%" << endl;

@@ -9,7 +9,7 @@
 #include <numeric>
 #include <cstdint>
 #include <sstream>
-#include "../custom_math.cpp"
+#include "../../custom_math.cpp"
 
 using namespace std;
 typedef vector<double> Vec;

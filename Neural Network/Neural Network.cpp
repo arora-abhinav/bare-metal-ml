@@ -62,7 +62,8 @@ public:
         this->input_size = input_size;
 
         static mt19937 gen(random_device{}());
-        normal_distribution<double> gauss(0.0, 0.01);
+        double he_std = sqrt(2.0 / input_size);
+        normal_distribution<double> gauss(0.0, he_std);
 
         parameters.resize(neuron_num, Vec(input_size));
         for (int i = 0; i < neuron_num; i++)
@@ -115,10 +116,10 @@ public:
 
 class LossFunctions {
 public:
-    Vec regularise(Vec vector, double epsilon = 1e-5) {
+    Vec regularise(Vec vector, double epsilon = 1e-7) {
         Vec copy(vector.size());
         for (int i = 0; i < (int)vector.size(); i++)
-            copy[i] = vector[i] + epsilon;
+            copy[i] = max(epsilon, min(1.0 - epsilon, vector[i]));
         return copy;
     }
 
@@ -444,11 +445,11 @@ int main(int argc, char** argv) {
     }
 
     Adam adam(0.001);
-    Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.2);
-    MNIST_Network.train_loop(200, y_train, 256);
+    Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.1);
+    MNIST_Network.train_loop(500, y_train, 256);
 
     //Important to set dropout_rate to 0
-    MNIST_Network.dropout_rate = 0
+    MNIST_Network.dropout_rate = 0;
     double accuracy = MNIST_Network.test_accuracy(x_test, y_test);
     cout << "Test accuracy: " << accuracy << "%" << endl;
 

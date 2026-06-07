@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools", "pybind11>=2.10"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "bare-metal-ml"
+version = "0.1.0"
+description = "Classical ML algorithms implemented from scratch in Python and C++, with no high-level ML library dependencies."
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+cpp = ["pybind11>=2.10"]

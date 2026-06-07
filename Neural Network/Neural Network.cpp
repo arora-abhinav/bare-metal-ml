@@ -445,8 +445,10 @@ int main(int argc, char** argv) {
 
     Adam adam(0.001);
     Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.2);
-    MNIST_Network.train_loop(30, y_train, 256);
+    MNIST_Network.train_loop(200, y_train, 256);
 
+    //Important to set dropout_rate to 0
+    MNIST_Network.dropout_rate = 0
     double accuracy = MNIST_Network.test_accuracy(x_test, y_test);
     cout << "Test accuracy: " << accuracy << "%" << endl;
 

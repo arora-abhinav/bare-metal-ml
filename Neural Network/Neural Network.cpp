@@ -54,6 +54,7 @@ public:
     Mat second_moment_weight;
     Mat first_moment_bias;
     Mat second_moment_bias;
+    Mat dropout_mask;
 
     Layer(int neuron_num, int input_size, FunctionType function_type) {
         this->function_type = function_type;
@@ -220,12 +221,14 @@ public:
     vector<Layer> layers;
     Optimizer* optimizer;
     Mat current_batch;
+    double dropout_rate;
 
-    Network(int layer_num, vector<int> neurons_in_layers, Mat initial_input, FunctionType function_type, Optimizer* optimizer) {
+    Network(int layer_num, vector<int> neurons_in_layers, Mat initial_input, FunctionType function_type, Optimizer* optimizer, double dropout_rate = 0.0) {
         this->number_of_layers = layer_num;
         this->neurons_in_layers = neurons_in_layers;
         this->initial_input = initial_input;
         this->optimizer = optimizer;
+        this->dropout_rate = dropout_rate;
 
         for (int i = 0; i < number_of_layers; i++) {
             if (i == 0)
@@ -240,9 +243,21 @@ public:
         Layer& layer = layers[layer_index];
         Mat linear_res = layer.linearize(layer.parameters, input, layer.bias);
         layer.z = linear_res;
-        Mat output = (layer_index == (int)layers.size() - 1)
-            ? layer.hypothesis(linear_res, true)
-            : layer.hypothesis(linear_res);
+        bool is_last = (layer_index == (int)layers.size() - 1);
+        Mat output = is_last ? layer.hypothesis(linear_res, true) : layer.hypothesis(linear_res);
+
+        if (dropout_rate > 0.0 && !is_last) {
+            static mt19937 rng(random_device{}());
+            uniform_real_distribution<double> dist(0.0, 1.0);
+            Mat mask(output.size(), Vec(output[0].size(), 0.0));
+            for (int row = 0; row < (int)mask.size(); row++)
+                for (int col = 0; col < (int)mask[0].size(); col++)
+                    mask[row][col] = dist(rng) >= dropout_rate ? 1.0 : 0.0;
+            output = element_wise_multiplication(output, mask);
+            output = scalar_multiply_matrix(output, 1.0 / (1.0 - dropout_rate));
+            layer.dropout_mask = mask;
+        }
+
         layer.a = output;
         feedforward(layer_index + 1, output);
     }
@@ -280,6 +295,8 @@ public:
         } else {
             product_two = element_wise_multiplication(multiplied, ReLU_derivative(current_layer.z));
         }
+        if (dropout_rate > 0.0 && !current_layer.dropout_mask.empty())
+            product_two = element_wise_multiplication(product_two, current_layer.dropout_mask);
         Mat prev_act_T = (previous_layer != nullptr)
             ? transpose_matrix(previous_layer->a)
             : transpose_matrix(current_batch);
@@ -427,7 +444,7 @@ int main(int argc, char** argv) {
     }
 
     Adam adam(0.001);
-    Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU, &adam);
+    Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.2);
     MNIST_Network.train_loop(30, y_train, 256);
 
     double accuracy = MNIST_Network.test_accuracy(x_test, y_test);

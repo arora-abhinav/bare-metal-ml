@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <sstream>
 #include "../../custom_math.cpp"
+#include "autograd.hpp"
 
 using namespace std;
 typedef vector<double> Vec;
@@ -55,6 +56,10 @@ public:
     Mat first_moment_bias;
     Mat second_moment_bias;
     Mat dropout_mask;
+    MatrixPtr W_node;
+    MatrixPtr b_node;
+    MatrixPtr z_node;
+    MatrixPtr a_node;
 
     Layer(int neuron_num, int input_size, FunctionType function_type) {
         this->function_type = function_type;
@@ -239,28 +244,87 @@ public:
         }
     }
 
-    void feedforward(int layer_index, Mat input) {
+    //Expands the (neuron_num x 1) bias into (neuron_num x batch_size) so it can be added to
+    //the pre-activation. The node is kept in the graph so its back() can reverse the broadcast
+    //by summing the upstream gradient across the batch dimension, recovering a (neuron_num x 1) gradient.
+    MatrixPtr broadcast_bias(MatrixPtr b_node, int batch_size) {
+        int rows = b_node->matrix.size();
+        Mat data(rows, Vec(batch_size, 0.0));
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < batch_size; c++)
+                data[r][c] = b_node->matrix[r][0];
+        auto res = make_shared<Matrix>(data, set<ElemPtr>{b_node}, "broadcast");
+        res->gradient = Mat(rows, Vec(batch_size, 0.0));
+        res->back = [res, b_node, batch_size]() {
+            //The gradient of a broadcast is the sum across the broadcasted dimension
+            int rows = res->gradient.size();
+            Mat row_sums(rows, Vec(1, 0.0));
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < batch_size; c++)
+                    row_sums[r][0] += res->gradient[r][c];
+            b_node->gradient = matrix_addition_and_sub(b_node->gradient, row_sums, "add");
+        };
+        return res;
+    }
+
+    //Forward pass builds the computation graph using Matrix nodes instead of raw lists.
+    //Each layer's parameters and bias are wrapped as leaf Matrix nodes so their gradients are
+    //automatically populated when backprop() runs backward through the graph.
+    void feedforward(int layer_index, MatrixPtr input_node) {
         if (layer_index >= (int)layers.size()) return;
+
         Layer& layer = layers[layer_index];
-        Mat linear_res = layer.linearize(layer.parameters, input, layer.bias);
-        layer.z = linear_res;
         bool is_last = (layer_index == (int)layers.size() - 1);
-        Mat output = is_last ? layer.hypothesis(linear_res, true) : layer.hypothesis(linear_res);
+        int batch_size = input_node->matrix[0].size();
 
-        if (dropout_rate > 0.0 && !is_last) {
-            static mt19937 rng(random_device{}());
-            uniform_real_distribution<double> dist(0.0, 1.0);
-            Mat mask(output.size(), Vec(output[0].size(), 0.0));
-            for (int row = 0; row < (int)mask.size(); row++)
-                for (int col = 0; col < (int)mask[0].size(); col++)
-                    mask[row][col] = dist(rng) >= dropout_rate ? 1.0 : 0.0;
-            output = element_wise_multiplication(output, mask);
-            output = scalar_multiply_matrix(output, 1.0 / (1.0 - dropout_rate));
-            layer.dropout_mask = mask;
+        //Wrap parameters as leaf Matrix nodes and initialise their gradients as zero matrices
+        //so matrix_addition_and_sub in each back() has a valid matrix to accumulate into
+        layer.W_node = make_shared<Matrix>(layer.parameters);
+        layer.b_node = make_shared<Matrix>(layer.bias);
+        layer.W_node->gradient = Mat(layer.neuron_num, Vec(layer.input_size, 0.0));
+        layer.b_node->gradient = Mat(layer.neuron_num, Vec(1, 0.0));
+
+        //z = W @ X + b_broadcast — each operation creates a node that records its children
+        MatrixPtr b_broadcast  = broadcast_bias(layer.b_node, batch_size);
+        MatrixPtr matmul_node  = static_pointer_cast<Matrix>(layer.W_node->mul(input_node));
+        matmul_node->gradient  = Mat(layer.neuron_num, Vec(batch_size, 0.0));
+        layer.z_node = static_pointer_cast<Matrix>(matmul_node->add(b_broadcast));
+        layer.z_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
+        layer.z = layer.z_node->matrix;
+
+        if (is_last) {
+            //Softmax stays outside the graph because column-wise normalisation requires a
+            //broadcast division that Matrix does not yet support. Its gradient fuses cleanly
+            //with cross-entropy in backward() so nothing is lost by keeping it separate.
+            layer.a = layer.hypothesis(layer.z_node->matrix, true);
+            return feedforward(layer_index + 1, make_shared<Matrix>(layer.a));
+        } else {
+            //Activation is kept inside the graph so its local derivative is tracked automatically
+            MatrixPtr a_node = (layer.function_type == FunctionType::RELU)
+                ? static_pointer_cast<Matrix>(layer.z_node->relu())
+                : static_pointer_cast<Matrix>(layer.z_node->sigmoid());
+
+            a_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
+
+            //Dropout is applied inside the graph so the mask correctly zeroes out the same
+            //positions during the backward pass via element_wise_mult's back()
+            if (dropout_rate > 0.0) {
+                static mt19937 rng(random_device{}());
+                uniform_real_distribution<double> dist(0.0, 1.0);
+                Mat mask_data(layer.neuron_num, Vec(batch_size, 0.0));
+                for (int r = 0; r < layer.neuron_num; r++)
+                    for (int c = 0; c < batch_size; c++)
+                        mask_data[r][c] = dist(rng) >= dropout_rate ? 1.0 : 0.0;
+                auto mask_node = make_shared<Matrix>(mask_data);
+                a_node = a_node->element_wise_mult(mask_node);
+                a_node = a_node->scalar_multiply(1.0 / (1.0 - dropout_rate));
+                a_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
+            }
+
+            layer.a_node = a_node;
+            layer.a = a_node->matrix;
+            return feedforward(layer_index + 1, a_node);
         }
-
-        layer.a = output;
-        feedforward(layer_index + 1, output);
     }
 
     double total_loss(Mat output, function<double(Vec, Vec)> loss_type, Mat input_labels) {
@@ -273,36 +337,21 @@ public:
         return total;
     }
 
-    pair<Mat, Mat> last_layer_backprop(Mat labels, Layer& final_layer, Layer* prev_layer = nullptr) {
-        Mat prev_act_T = (prev_layer != nullptr)
-            ? transpose_matrix(prev_layer->a)
-            : transpose_matrix(current_batch);
-        Mat term_one = matrix_addition_and_sub(labels, final_layer.a, "sub");
-        Mat final_prod = matrix_with_matrix_multiplication(term_one, prev_act_T);
-        Mat res = scalar_multiply_matrix(final_prod, -1.0 / labels[0].size());
-        Mat product_two = scalar_multiply_matrix(term_one, -1.0 / labels[0].size());
-        return {res, product_two};
-    }
+    //Replaces last_layer_backprop and previous_layer_backprop entirely.
+    //The combined gradient of softmax + cross-entropy w.r.t the pre-softmax activations z is
+    //(y_hat - y) / m. This is injected directly at the last layer's z_node so backprop()
+    //propagates it backward through every previous layer automatically via each node's back() closure.
+    void backward(Mat batch_labels) {
+        int m = batch_labels[0].size();
+        Mat& y_hat = layers.back().a;
+        Mat combined_gradient(y_hat.size(), Vec(y_hat[0].size(), 0.0));
+        for (int r = 0; r < (int)y_hat.size(); r++)
+            for (int c = 0; c < (int)y_hat[0].size(); c++)
+                combined_gradient[r][c] = (y_hat[r][c] - batch_labels[r][c]) / m;
 
-    pair<Mat, Mat> previous_layer_backprop(Layer& current_layer, Layer& next_layer, Mat previous_product, FunctionType activation, Layer* previous_layer = nullptr) {
-        Mat next_param_T = transpose_matrix(next_layer.parameters);
-        Mat multiplied = matrix_with_matrix_multiplication(next_param_T, previous_product);
-        Mat product_two;
-        if (activation == FunctionType::SIGMOID) {
-            Mat ones(current_layer.a.size(), Vec(current_layer.a[0].size(), 1.0));
-            Mat term = matrix_addition_and_sub(ones, current_layer.a, "sub");
-            Mat product_one = element_wise_multiplication(multiplied, current_layer.a);
-            product_two = element_wise_multiplication(product_one, term);
-        } else {
-            product_two = element_wise_multiplication(multiplied, ReLU_derivative(current_layer.z));
-        }
-        if (dropout_rate > 0.0 && !current_layer.dropout_mask.empty())
-            product_two = element_wise_multiplication(product_two, current_layer.dropout_mask);
-        Mat prev_act_T = (previous_layer != nullptr)
-            ? transpose_matrix(previous_layer->a)
-            : transpose_matrix(current_batch);
-        Mat res = matrix_with_matrix_multiplication(product_two, prev_act_T);
-        return {res, product_two};
+        //Seed the gradient at the last layer's z_node and let the graph do the rest
+        layers.back().z_node->gradient = combined_gradient;
+        layers.back().z_node->backprop();
     }
 
     void train_loop(int epochs, Mat train_labels, int batch_size) {
@@ -319,51 +368,32 @@ public:
             for (int b = 0; b < num_batches; b++) {
                 int start = b * batch_size;
 
-                // Select batch columns from input and labels
-                current_batch = Mat(initial_input.size(), Vec(batch_size, 0.0));
+                Mat batch_input(initial_input.size(), Vec(batch_size, 0.0));
                 Mat batch_labels(train_labels.size(), Vec(batch_size, 0.0));
                 for (int row = 0; row < (int)initial_input.size(); row++)
                     for (int j = 0; j < batch_size; j++)
-                        current_batch[row][j] = initial_input[row][indices[start + j]];
+                        batch_input[row][j] = initial_input[row][indices[start + j]];
                 for (int row = 0; row < (int)train_labels.size(); row++)
                     for (int j = 0; j < batch_size; j++)
                         batch_labels[row][j] = train_labels[row][indices[start + j]];
 
-                feedforward(0, current_batch);
+                //Forward pass — builds the computation graph for this batch
+                feedforward(0, make_shared<Matrix>(batch_input));
+
                 double current_loss = total_loss(layers.back().a, [&](Vec y_hat, Vec y) {
                     return loss_fn.cross_entropy_loss(y_hat, y);
                 }, batch_labels);
                 cout << "Epoch " << epoch << ", Batch " << b << ", Loss: " << current_loss << endl;
 
+                //Backward pass — autograd propagates gradients through the graph
+                backward(batch_labels);
+
+                //Gradients now live in each layer's W_node and b_node after backprop()
                 vector<Mat> weight_results(layers.size());
                 vector<Mat> bias_results(layers.size());
-
-                auto [last_w, backprop_prod] = (layers.size() > 1)
-                    ? last_layer_backprop(batch_labels, layers.back(), &layers[layers.size() - 2])
-                    : last_layer_backprop(batch_labels, layers.back());
-
-                weight_results.back() = last_w;
-                Mat last_bias_grad(backprop_prod.size(), Vec(1, 0.0));
-                for (int row = 0; row < (int)backprop_prod.size(); row++) {
-                    double s = 0.0;
-                    for (double val : backprop_prod[row]) s += val;
-                    last_bias_grad[row][0] = s;
-                }
-                bias_results.back() = last_bias_grad;
-
-                for (int i = (int)layers.size() - 2; i >= 0; i--) {
-                    auto [res, new_prod] = (i > 0)
-                        ? previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type, &layers[i - 1])
-                        : previous_layer_backprop(layers[i], layers[i + 1], backprop_prod, layers[i].function_type);
-                    backprop_prod = new_prod;
-                    Mat bias_grad(backprop_prod.size(), Vec(1, 0.0));
-                    for (int row = 0; row < (int)backprop_prod.size(); row++) {
-                        double s = 0.0;
-                        for (double val : backprop_prod[row]) s += val;
-                        bias_grad[row][0] = s;
-                    }
-                    bias_results[i] = bias_grad;
-                    weight_results[i] = res;
+                for (int i = 0; i < (int)layers.size(); i++) {
+                    weight_results[i] = layers[i].W_node->gradient;
+                    bias_results[i]   = layers[i].b_node->gradient;
                 }
 
                 optimizer->update(layers, weight_results, bias_results);

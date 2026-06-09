@@ -445,8 +445,8 @@ int main(int argc, char** argv) {
     }
 
     Adam adam(0.001);
-    Network MNIST_Network(3, {128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.1);
-    MNIST_Network.train_loop(500, y_train, 256);
+    Network MNIST_Network(5, {512, 256, 128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.3);
+    MNIST_Network.train_loop(100, y_train, 128);
 
     //Important to set dropout_rate to 0
     MNIST_Network.dropout_rate = 0;

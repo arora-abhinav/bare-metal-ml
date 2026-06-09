@@ -37,27 +37,16 @@ public:
 
     virtual ~Element() = default;
 
-    //Elementwise or matrix addition depending on the subclass
-    virtual ElemPtr add(ElemPtr other) = 0;
-
-    //Elementwise multiplication for Scalar, matrix multiplication for Matrix
-    virtual ElemPtr mul(ElemPtr other) = 0;
-
-    //Elementwise or matrix subtraction depending on the subclass
-    virtual ElemPtr sub(ElemPtr other) = 0;
-
-    //Elementwise division for Scalar, elementwise division for Matrix
-    virtual ElemPtr truediv(ElemPtr other) = 0;
-
-    //Negation — flips the sign of every element
-    virtual ElemPtr neg() = 0;
-
-    //Activation functions — applied elementwise in both subclasses
-    virtual ElemPtr relu()    = 0;
-    virtual ElemPtr sigmoid() = 0;
-    virtual ElemPtr tanh_op() = 0;
-    virtual ElemPtr exp_op()  = 0;
-    virtual ElemPtr log_op()  = 0;
+    virtual ElemPtr add(ElemPtr other)    = 0;
+    virtual ElemPtr mul(ElemPtr other)    = 0;
+    virtual ElemPtr sub(ElemPtr other)    = 0;
+    virtual ElemPtr truediv(ElemPtr other)= 0;
+    virtual ElemPtr neg()                 = 0;
+    virtual ElemPtr relu()                = 0;
+    virtual ElemPtr sigmoid()             = 0;
+    virtual ElemPtr tanh_op()             = 0;
+    virtual ElemPtr exp_op()              = 0;
+    virtual ElemPtr log_op()              = 0;
 };
 
 
@@ -69,10 +58,9 @@ public:
 class TopologicalSort {
 public:
     void backprop(ElemPtr root_node) {
-        map<Element*, int>    num_dependencies;
+        map<Element*, int>     num_dependencies;
         map<Element*, ElemPtr> node_ptrs;
 
-        //Collect every node reachable from the root and initialise its dependency count to 0
         function<void(ElemPtr)> collect_nodes = [&](ElemPtr node) {
             if (num_dependencies.find(node.get()) == num_dependencies.end()) {
                 num_dependencies[node.get()] = 0;
@@ -83,12 +71,10 @@ public:
         };
         collect_nodes(root_node);
 
-        //Count how many parents each node has (how many nodes depend on it)
         for (auto& [ptr, count] : num_dependencies)
             for (auto& c : node_ptrs[ptr]->children)
                 num_dependencies[c.get()]++;
 
-        //Nodes with 0 dependants are roots — start the BFS from them
         deque<Element*> q;
         for (auto& [ptr, count] : num_dependencies)
             if (count == 0)
@@ -117,31 +103,23 @@ public:
 
 // ── Scalar ────────────────────────────────────────────────────────────────────
 
-//Using a scalar class that represents the node in each graph for any kind of mathematical equation.
-//The whole point of the autograd is that each sort of individual operation has its own unique way of
-//taking the derivative. Each of these operations have a different way of computing their local
-//derivatives. In a bigger more convoluted equation the chain rule can be applied starting from the
-//local derivative all the way up to the desired result.
 class Scalar : public Element {
 public:
     double digit;
     double gradient;
 
-    //Each scalar has a set of children it is DIRECTLY derived from. NOT the indirect children.
-    //The indirect children can be obtained via traversing backwards in the graph.
     Scalar(double digit, set<ElemPtr> children = {}, string op = "")
         : Element(children, op), digit(digit), gradient(0.0) {}
 
-    //Building out the basic operations.
     ElemPtr add(ElemPtr other_elem) override {
         auto other = static_pointer_cast<Scalar>(other_elem);
         auto self  = static_pointer_cast<Scalar>(shared_from_this());
         auto res   = make_shared<Scalar>(self->digit + other->digit, set<ElemPtr>{self, other}, "add");
-        res->back = [res, self, other]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
             //The local derivative of an added expression w.r.t 1 element is 1
-            //res.gradient is the derivative of the FINAL output with respect to this current res
             self->gradient  += res->gradient;
-            //Same logic applies for other
             other->gradient += res->gradient;
         };
         return res;
@@ -151,9 +129,10 @@ public:
         auto other = static_pointer_cast<Scalar>(other_elem);
         auto self  = static_pointer_cast<Scalar>(shared_from_this());
         auto res   = make_shared<Scalar>(self->digit * other->digit, set<ElemPtr>{self, other}, "mul");
-        res->back = [res, self, other]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(ab)/da = b) and (d(ab)/db = a)
-            //Multiply local with global derivative
             self->gradient  += other->digit * res->gradient;
             other->gradient += self->digit  * res->gradient;
         };
@@ -164,9 +143,10 @@ public:
         auto other = static_pointer_cast<Scalar>(other_elem);
         auto self  = static_pointer_cast<Scalar>(shared_from_this());
         auto res   = make_shared<Scalar>(self->digit / other->digit, set<ElemPtr>{self, other}, "div");
-        res->back = [res, self, other]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(a/b)/da = 1/b) and (d(a/b)/db = -a*b^-2)
-            //Multiply with global derivative
             self->gradient  += res->gradient * (1.0 / other->digit);
             other->gradient += self->digit * -(pow(other->digit, -2)) * res->gradient;
         };
@@ -177,9 +157,10 @@ public:
         auto other = static_pointer_cast<Scalar>(other_elem);
         auto self  = static_pointer_cast<Scalar>(shared_from_this());
         auto res   = make_shared<Scalar>(self->digit - other->digit, set<ElemPtr>{self, other}, "sub");
-        res->back = [res, self, other]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(a-b)/da = 1) and (d(a-b)/db = -1)
-            //Multiply with global derivative
             self->gradient  += res->gradient;
             other->gradient += -res->gradient;
         };
@@ -189,9 +170,10 @@ public:
     ElemPtr neg() override {
         auto self = static_pointer_cast<Scalar>(shared_from_this());
         auto res  = make_shared<Scalar>(-self->digit, set<ElemPtr>{self}, "neg");
-        res->back = [res, self]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(-a)/da = -1)
-            //Multiply with global derivative
             self->gradient += -1.0 * res->gradient;
         };
         return res;
@@ -200,9 +182,10 @@ public:
     ElemPtr tanh_op() override {
         auto self = static_pointer_cast<Scalar>(shared_from_this());
         auto res  = make_shared<Scalar>(tanh(self->digit), set<ElemPtr>{self}, "tanh");
-        res->back = [res, self]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(tanh(a))/da = 1 - tanh^2(a))
-            //Multiply with global derivative
             self->gradient += (1.0 - pow(tanh(self->digit), 2)) * res->gradient;
         };
         return res;
@@ -211,9 +194,10 @@ public:
     ElemPtr exp_op() override {
         auto self = static_pointer_cast<Scalar>(shared_from_this());
         auto res  = make_shared<Scalar>(exp(self->digit), set<ElemPtr>{self}, "exp");
-        res->back = [res, self]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(e^a)/da = e^a)
-            //Multiply with global derivative
             self->gradient += exp(self->digit) * res->gradient;
         };
         return res;
@@ -222,9 +206,10 @@ public:
     ElemPtr log_op() override {
         auto self = static_pointer_cast<Scalar>(shared_from_this());
         auto res  = make_shared<Scalar>(log(self->digit), set<ElemPtr>{self}, "log");
-        res->back = [res, self]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(ln(a))/da = 1/a)
-            //Multiply with global derivative
             self->gradient += (1.0 / self->digit) * res->gradient;
         };
         return res;
@@ -233,9 +218,10 @@ public:
     ElemPtr relu() override {
         auto self = static_pointer_cast<Scalar>(shared_from_this());
         auto res  = make_shared<Scalar>(max(0.0, self->digit), set<ElemPtr>{self}, "relu");
-        res->back = [res, self]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(relu(a))/da = 1 if a > 0, else 0)
-            //Multiply with global derivative
             self->gradient += (self->digit > 0 ? 1.0 : 0.0) * res->gradient;
         };
         return res;
@@ -245,9 +231,10 @@ public:
         auto self = static_pointer_cast<Scalar>(shared_from_this());
         double sig = 1.0 / (1.0 + exp(-self->digit));
         auto res = make_shared<Scalar>(sig, set<ElemPtr>{self}, "sigmoid");
-        res->back = [res, self, sig]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self, sig]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(sigmoid(a))/da = sigmoid(a) * (1 - sigmoid(a)))
-            //Multiply with global derivative
             self->gradient += (sig * (1.0 - sig)) * res->gradient;
         };
         return res;
@@ -256,23 +243,21 @@ public:
     ScalarPtr pow_op(ScalarPtr other) {
         auto self = static_pointer_cast<Scalar>(shared_from_this());
         auto res  = make_shared<Scalar>(pow(self->digit, other->digit), set<ElemPtr>{self, other}, "pow");
-        res->back = [res, self, other]() {
+        weak_ptr<Scalar> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(a^b)/da = b * a^(b-1)) and (d(a^b)/db = a^b * ln(a))
-            //Multiply with global derivative
             self->gradient  += (other->digit * pow(self->digit, other->digit - 1)) * res->gradient;
             other->gradient += (res->digit * log(self->digit)) * res->gradient;
         };
         return res;
     }
 
-    //Reverse operators — called when the left operand cannot handle the operation
     ScalarPtr radd(double other) { return static_pointer_cast<Scalar>(make_shared<Scalar>(other)->add(shared_from_this())); }
     ScalarPtr rmul(double other) { return static_pointer_cast<Scalar>(make_shared<Scalar>(other)->mul(shared_from_this())); }
     ScalarPtr rsub(double other) { return static_pointer_cast<Scalar>(make_shared<Scalar>(other)->sub(shared_from_this())); }
     ScalarPtr rdiv(double other) { return static_pointer_cast<Scalar>(make_shared<Scalar>(other)->truediv(shared_from_this())); }
 
-    //This is to prevent calling backprop manually. Kahn's topological sort flattens the graph
-    //into a list that can be traversed in order so back() is called in the correct sequence.
     void backprop() {
         TopologicalSort topo;
         topo.backprop(shared_from_this());
@@ -292,20 +277,21 @@ public:
     Mat matrix;
     Mat gradient;
 
-    //Each matrix node stores the data, its direct parents in the graph, and the operation that produced it.
-    //gradient is initialised as an empty Mat and must be set to a zero matrix of the correct shape
-    //before backprop runs so that matrix_addition_and_sub has a valid matrix to accumulate into.
+    //gradient is auto-initialised to a zero matrix of the same shape as matrix so that
+    //every back() closure can safely accumulate into it via matrix_addition_and_sub.
     Matrix(Mat matrix, set<ElemPtr> children = {}, string op = "")
-        : Element(children, op), matrix(matrix) {}
+        : Element(children, op), matrix(matrix),
+          gradient(matrix.empty() ? Mat{} : Mat(matrix.size(), Vec(matrix[0].size(), 0.0))) {}
 
-    //Building out the basic operations.
     ElemPtr add(ElemPtr other_elem) override {
         auto other = static_pointer_cast<Matrix>(other_elem);
         auto self  = static_pointer_cast<Matrix>(shared_from_this());
         auto res   = make_shared<Matrix>(matrix_addition_and_sub(self->matrix, other->matrix, "add"),
                                          set<ElemPtr>{self, other}, "add");
-        res->back = [res, self, other]() {
-            //The local derivative of matrix addition w.r.t either operand is the identity — d(A+B)/dA = I
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //The local derivative of matrix addition w.r.t either operand is the identity
             //So the upstream gradient flows through unchanged to both operands
             self->gradient  = matrix_addition_and_sub(self->gradient,  res->gradient, "add");
             other->gradient = matrix_addition_and_sub(other->gradient, res->gradient, "add");
@@ -318,10 +304,12 @@ public:
         auto self  = static_pointer_cast<Matrix>(shared_from_this());
         auto res   = make_shared<Matrix>(matrix_with_matrix_multiplication(self->matrix, other->matrix),
                                          set<ElemPtr>{self, other}, "mul");
-        res->back = [res, self, other]() {
-            //For matrix multiplication C = A @ B, the local derivatives are dC/dA = B^T and dC/dB = A^T
-            //Multiply local with global (upstream) derivative via the chain rule
-            Mat term = matrix_with_matrix_multiplication(transpose_matrix(other->matrix), res->gradient);
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //dL/dA = dL/dC @ B^T — upstream gradient times B transposed on the right
+            //dL/dB = A^T @ dL/dC — A transposed times upstream gradient on the left
+            Mat term = matrix_with_matrix_multiplication(res->gradient, transpose_matrix(other->matrix));
             self->gradient  = matrix_addition_and_sub(self->gradient, term, "add");
             term = matrix_with_matrix_multiplication(transpose_matrix(self->matrix), res->gradient);
             other->gradient = matrix_addition_and_sub(other->gradient, term, "add");
@@ -334,9 +322,10 @@ public:
         auto self  = static_pointer_cast<Matrix>(shared_from_this());
         auto res   = make_shared<Matrix>(matrix_addition_and_sub(self->matrix, other->matrix, "sub"),
                                          set<ElemPtr>{self, other}, "sub");
-        res->back = [res, self, other]() {
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(A-B)/dA = I) and (d(A-B)/dB = -I)
-            //Multiply with global derivative
             self->gradient  = matrix_addition_and_sub(self->gradient, res->gradient, "add");
             Mat term = scalar_multiply_matrix(res->gradient, -1.0);
             other->gradient = matrix_addition_and_sub(other->gradient, term, "add");
@@ -348,9 +337,10 @@ public:
         auto self = static_pointer_cast<Matrix>(shared_from_this());
         auto res  = make_shared<Matrix>(scalar_multiply_matrix(self->matrix, -1.0),
                                         set<ElemPtr>{self}, "neg");
-        res->back = [res, self]() {
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(-A)/dA = -I)
-            //Multiply with global derivative
             Mat term = scalar_multiply_matrix(res->gradient, -1.0);
             self->gradient = matrix_addition_and_sub(self->gradient, term, "add");
         };
@@ -362,9 +352,10 @@ public:
         auto self  = static_pointer_cast<Matrix>(shared_from_this());
         auto res   = make_shared<Matrix>(element_wise_division_two_matrices(self->matrix, other->matrix),
                                          set<ElemPtr>{self, other}, "elt_div");
-        res->back = [res, self, other]() {
-            //Local derivative of element-wise division: d(A/B)/dA_ij = 1/B_ij and d(A/B)/dB_ij = -A_ij/B_ij^2
-            //Multiply with global derivative
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //Local derivative: d(A/B)/dA_ij = 1/B_ij and d(A/B)/dB_ij = -A_ij/B_ij^2
             int rows = other->matrix.size(), cols = other->matrix[0].size();
             Mat ones(rows, Vec(cols, 1.0));
             Mat inv_other = element_wise_division_two_matrices(ones, other->matrix);
@@ -383,9 +374,10 @@ public:
         auto self = static_pointer_cast<Matrix>(shared_from_this());
         auto res  = make_shared<Matrix>(element_wise_multiplication(self->matrix, other->matrix),
                                         set<ElemPtr>{self, other}, "elt_mul");
-        res->back = [res, self, other]() {
-            //Local derivative of element-wise (Hadamard) multiplication: d(A⊙B)/dA_ij = B_ij
-            //Multiply with global derivative
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self, other]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //Local derivative of Hadamard multiplication: d(A⊙B)/dA_ij = B_ij and d(A⊙B)/dB_ij = A_ij
             self->gradient  = matrix_addition_and_sub(self->gradient,
                 element_wise_multiplication(other->matrix, res->gradient), "add");
             other->gradient = matrix_addition_and_sub(other->gradient,
@@ -394,15 +386,15 @@ public:
         return res;
     }
 
-    //Multiplying every element of the matrix by a scalar value.
     //The scalar is a raw number, not a Matrix node, so only self receives a gradient.
     MatrixPtr scalar_multiply(double scalar) {
         auto self = static_pointer_cast<Matrix>(shared_from_this());
         auto res  = make_shared<Matrix>(scalar_multiply_matrix(self->matrix, scalar),
                                         set<ElemPtr>{self}, "scalar_mul");
-        res->back = [res, self, scalar]() {
-            //Local derivative (d(sA)/dA_ij = s) — the scalar passes straight through
-            //Multiply with global derivative
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self, scalar]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //Local derivative (d(sA)/dA_ij = s)
             self->gradient = matrix_addition_and_sub(self->gradient,
                 scalar_multiply_matrix(res->gradient, scalar), "add");
         };
@@ -412,8 +404,10 @@ public:
     MatrixPtr transpose_op() {
         auto self = static_pointer_cast<Matrix>(shared_from_this());
         auto res  = make_shared<Matrix>(transpose_matrix(self->matrix), set<ElemPtr>{self}, "transpose");
-        res->back = [res, self]() {
-            //Transposing twice returns the original, so the upstream gradient just needs to be transposed back
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //Transposing twice returns the original, so the upstream gradient is transposed back
             self->gradient = matrix_addition_and_sub(self->gradient,
                 transpose_matrix(res->gradient), "add");
         };
@@ -428,9 +422,10 @@ public:
             for (int c = 0; c < cols; c++)
                 relu_mat[r][c] = max(0.0, self->matrix[r][c]);
         auto res = make_shared<Matrix>(relu_mat, set<ElemPtr>{self}, "relu");
-        res->back = [res, self]() {
-            //Local derivative (d(relu(A))/dA_ij = 1 if A_ij > 0, else 0) — the ReLU derivative mask
-            //Multiply with global derivative
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //Local derivative (d(relu(A))/dA_ij = 1 if A_ij > 0, else 0)
             Mat mask = ReLU_derivative(self->matrix);
             self->gradient = matrix_addition_and_sub(self->gradient,
                 element_wise_multiplication(mask, res->gradient), "add");
@@ -446,10 +441,11 @@ public:
             for (int c = 0; c < cols; c++)
                 sig_mat[r][c] = 1.0 / (1.0 + exp(-self->matrix[r][c]));
         auto res = make_shared<Matrix>(sig_mat, set<ElemPtr>{self}, "sigmoid");
-        res->back = [res, self]() {
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(sigmoid(A))/dA_ij = sigmoid(A_ij) * (1 - sigmoid(A_ij)))
             //res->matrix already holds the sigmoid values so we reuse them directly
-            //Multiply with global derivative
             int rows = res->matrix.size(), cols = res->matrix[0].size();
             Mat ones(rows, Vec(cols, 1.0));
             Mat one_minus_sig = matrix_addition_and_sub(ones, res->matrix, "sub");
@@ -468,10 +464,11 @@ public:
             for (int c = 0; c < cols; c++)
                 tanh_mat[r][c] = tanh(self->matrix[r][c]);
         auto res = make_shared<Matrix>(tanh_mat, set<ElemPtr>{self}, "tanh");
-        res->back = [res, self]() {
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(tanh(A))/dA_ij = 1 - tanh^2(A_ij))
             //res->matrix already holds the tanh values so we square them and subtract from 1
-            //Multiply with global derivative
             int rows = res->matrix.size(), cols = res->matrix[0].size();
             Mat tanh_sq = element_wise_multiplication(res->matrix, res->matrix);
             Mat ones(rows, Vec(cols, 1.0));
@@ -490,10 +487,11 @@ public:
             for (int c = 0; c < cols; c++)
                 exp_mat[r][c] = exp(self->matrix[r][c]);
         auto res = make_shared<Matrix>(exp_mat, set<ElemPtr>{self}, "exp");
-        res->back = [res, self]() {
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(e^A)/dA_ij = e^A_ij) — the exponential is its own derivative
             //res->matrix already holds the exponential values so we reuse them directly
-            //Multiply with global derivative
             self->gradient = matrix_addition_and_sub(self->gradient,
                 element_wise_multiplication(res->matrix, res->gradient), "add");
         };
@@ -508,9 +506,10 @@ public:
             for (int c = 0; c < cols; c++)
                 log_mat[r][c] = log(self->matrix[r][c]);
         auto res = make_shared<Matrix>(log_mat, set<ElemPtr>{self}, "log");
-        res->back = [res, self]() {
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self]() {
+            auto res = res_weak.lock(); if (!res) return;
             //Local derivative (d(ln(A))/dA_ij = 1/A_ij)
-            //Multiply with global derivative
             int rows = self->matrix.size(), cols = self->matrix[0].size();
             Mat ones(rows, Vec(cols, 1.0));
             Mat inv_self = element_wise_division_two_matrices(ones, self->matrix);
@@ -521,7 +520,7 @@ public:
     }
 
     //Sums each row across all its columns, producing a (rows x 1) column vector.
-    //This is the matrix equivalent of summing a vector — used mainly to collapse batch gradients into bias gradients.
+    //Used mainly to collapse batch gradients into bias gradients.
     MatrixPtr sum_cols() {
         auto self = static_pointer_cast<Matrix>(shared_from_this());
         int rows = self->matrix.size(), cols = self->matrix[0].size();
@@ -530,9 +529,10 @@ public:
             for (int c = 0; c < cols; c++)
                 summed[r][0] += self->matrix[r][c];
         auto res = make_shared<Matrix>(summed, set<ElemPtr>{self}, "sum_cols");
-        res->back = [res, self, cols]() {
-            //Local derivative: d(res_i)/d(A_ij) = 1 for all j
-            //The upstream gradient res->gradient_i broadcasts back to every column in row i
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, self, cols]() {
+            auto res = res_weak.lock(); if (!res) return;
+            //d(res_i)/d(A_ij) = 1 for all j — broadcast gradient back across the batch dimension
             int rows = res->gradient.size();
             Mat broadcast(rows, Vec(cols, 0.0));
             for (int r = 0; r < rows; r++)
@@ -543,8 +543,8 @@ public:
         return res;
     }
 
-    //This is to prevent calling backprop manually. Kahn's topological sort flattens the graph
-    //into a list that can be traversed in order so back() is called in the correct sequence.
+    //Kahn's topological sort flattens the graph into a list that can be traversed in order
+    //so back() is called in the correct sequence.
     void backprop() {
         TopologicalSort topo;
         topo.backprop(shared_from_this());

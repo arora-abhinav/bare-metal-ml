@@ -284,7 +284,9 @@ class Matrix(Element):
         def back():
             #For matrix multiplication C = A @ B, the local derivatives are dC/dA = B^T and dC/dB = A^T
             #Multiply local with global (upstream) derivative via the chain rule
-            term = custom_math.matrix_with_matrix_multiplication(custom_math.transpose_matrix(other.matrix), res.gradient)
+            #dL/dA = dL/dC @ B^T — upstream gradient times B transposed on the right
+            #dL/dB = A^T @ dL/dC — A transposed times upstream gradient on the left
+            term = custom_math.matrix_with_matrix_multiplication(res.gradient, custom_math.transpose_matrix(other.matrix))
             self.gradient = custom_math.matrix_addition_and_sub(self.gradient, term, "add")
             term = custom_math.matrix_with_matrix_multiplication(custom_math.transpose_matrix(self.matrix), res.gradient)
             other.gradient = custom_math.matrix_addition_and_sub(other.gradient, term, "add")

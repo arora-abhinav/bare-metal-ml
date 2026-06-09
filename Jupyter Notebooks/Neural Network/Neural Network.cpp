@@ -242,6 +242,14 @@ public:
             else
                 layers.push_back(Layer(neurons_in_layers[i], neurons_in_layers[i - 1], function_type));
         }
+
+        //Create W_node and b_node once — they persist across batches.
+        //Each batch only resets their gradients and syncs the matrix data from layer.parameters/bias
+        //after the optimizer updates them, avoiding a full heap allocation + copy per batch.
+        for (auto& layer : layers) {
+            layer.W_node = make_shared<Matrix>(layer.parameters);
+            layer.b_node = make_shared<Matrix>(layer.bias);
+        }
     }
 
     //Expands the (neuron_num x 1) bias into (neuron_num x batch_size) so it can be added to
@@ -254,8 +262,9 @@ public:
             for (int c = 0; c < batch_size; c++)
                 data[r][c] = b_node->matrix[r][0];
         auto res = make_shared<Matrix>(data, set<ElemPtr>{b_node}, "broadcast");
-        res->gradient = Mat(rows, Vec(batch_size, 0.0));
-        res->back = [res, b_node, batch_size]() {
+        weak_ptr<Matrix> res_weak = res;
+        res->back = [res_weak, b_node, batch_size]() {
+            auto res = res_weak.lock(); if (!res) return;
             //The gradient of a broadcast is the sum across the broadcasted dimension
             int rows = res->gradient.size();
             Mat row_sums(rows, Vec(1, 0.0));
@@ -277,20 +286,20 @@ public:
         bool is_last = (layer_index == (int)layers.size() - 1);
         int batch_size = input_node->matrix[0].size();
 
-        //Wrap parameters as leaf Matrix nodes and initialise their gradients as zero matrices
-        //so matrix_addition_and_sub in each back() has a valid matrix to accumulate into
-        layer.W_node = make_shared<Matrix>(layer.parameters);
-        layer.b_node = make_shared<Matrix>(layer.bias);
+        //Sync latest parameter values, reset gradients, and clear stale graph edges
+        //from the previous batch so old nodes are freed and don't accumulate in memory.
+        layer.W_node->matrix   = layer.parameters;
         layer.W_node->gradient = Mat(layer.neuron_num, Vec(layer.input_size, 0.0));
+        layer.W_node->children = {};
+        layer.b_node->matrix   = layer.bias;
         layer.b_node->gradient = Mat(layer.neuron_num, Vec(1, 0.0));
+        layer.b_node->children = {};
 
         //z = W @ X + b_broadcast — each operation creates a node that records its children
-        MatrixPtr b_broadcast  = broadcast_bias(layer.b_node, batch_size);
-        MatrixPtr matmul_node  = static_pointer_cast<Matrix>(layer.W_node->mul(input_node));
-        matmul_node->gradient  = Mat(layer.neuron_num, Vec(batch_size, 0.0));
-        layer.z_node = static_pointer_cast<Matrix>(matmul_node->add(b_broadcast));
-        layer.z_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
-        layer.z = layer.z_node->matrix;
+        MatrixPtr b_broadcast = broadcast_bias(layer.b_node, batch_size);
+        MatrixPtr matmul_node = static_pointer_cast<Matrix>(layer.W_node->mul(input_node));
+        layer.z_node          = static_pointer_cast<Matrix>(matmul_node->add(b_broadcast));
+        layer.z               = layer.z_node->matrix;
 
         if (is_last) {
             //Softmax stays outside the graph because column-wise normalisation requires a
@@ -303,8 +312,6 @@ public:
             MatrixPtr a_node = (layer.function_type == FunctionType::RELU)
                 ? static_pointer_cast<Matrix>(layer.z_node->relu())
                 : static_pointer_cast<Matrix>(layer.z_node->sigmoid());
-
-            a_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
 
             //Dropout is applied inside the graph so the mask correctly zeroes out the same
             //positions during the backward pass via element_wise_mult's back()
@@ -377,7 +384,9 @@ public:
                     for (int j = 0; j < batch_size; j++)
                         batch_labels[row][j] = train_labels[row][indices[start + j]];
 
-                //Forward pass — builds the computation graph for this batch
+                //Forward pass — builds the computation graph for this batch.
+                //Constructor auto-initialises input_node gradient to zeros so mul's back()
+                //can safely accumulate into it even though we don't need dL/dX for the input.
                 feedforward(0, make_shared<Matrix>(batch_input));
 
                 double current_loss = total_loss(layers.back().a, [&](Vec y_hat, Vec y) {
@@ -402,7 +411,7 @@ public:
     }
 
     double test_accuracy(Mat x_test, Mat y_test) {
-        feedforward(0, x_test);
+        feedforward(0, make_shared<Matrix>(x_test));
         Mat output = layers.back().a;
         int correct = 0;
         for (int col = 0; col < (int)output[0].size(); col++) {
@@ -476,7 +485,7 @@ int main(int argc, char** argv) {
 
     Adam adam(0.001);
     Network MNIST_Network(5, {512, 256, 128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.3);
-    MNIST_Network.train_loop(100, y_train, 128);
+    MNIST_Network.train_loop(50, y_train, 128);
 
     //Important to set dropout_rate to 0
     MNIST_Network.dropout_rate = 0;

@@ -29,22 +29,71 @@ Mat vectorize_labels(vector<uint8_t> input_labels, int class_number) {
     return res;
 }
 
-class ActivationFunctions {
+//Users inherit from ActivationFunction and implement forward() and derivative() at scalar level.
+//The framework applies both element-wise across the matrix automatically via apply_activation().
+//Each subclass represents one activation function along with its derivative — keeping them
+//together ensures the forward and backward passes always stay in sync.
+class ActivationFunction {
 public:
-    double sigmoid(double input_val) {
-        return 1.0 / (1.0 + exp(-input_val));
-    }
+    virtual double forward(double x)    = 0;
+    virtual double derivative(double x) = 0;
+    virtual ~ActivationFunction()       = default;
+};
 
-    double ReLU(double input_val) {
-        return input_val > 0 ? input_val : 0.0;
+//Predefined activations — users can use these directly or as reference implementations
+class ReLU : public ActivationFunction {
+public:
+    double forward(double x)    override { return x > 0.0 ? x : 0.0; }
+    double derivative(double x) override { return x > 0.0 ? 1.0 : 0.0; }
+};
+
+class Sigmoid : public ActivationFunction {
+public:
+    double forward(double x) override { return 1.0 / (1.0 + exp(-x)); }
+    double derivative(double x) override {
+        double s = forward(x);
+        return s * (1.0 - s);
     }
 };
 
-enum class FunctionType { RELU, SIGMOID };
+class Tanh : public ActivationFunction {
+public:
+    double forward(double x)    override { return tanh(x); }
+    double derivative(double x) override { return 1.0 - tanh(x) * tanh(x); }
+};
+
+//Convenience enum for selecting predefined activations without constructing them manually.
+//Pass a custom ActivationFunction* to the Network constructor to override this entirely.
+enum class FunctionType { RELU, SIGMOID, TANH };
+
+//Wraps any ActivationFunction into a Matrix autograd node.
+//forward() is applied element-wise to build the output matrix.
+//back() uses derivative() element-wise and multiplies by the upstream gradient.
+MatrixPtr apply_activation(MatrixPtr z_node, shared_ptr<ActivationFunction> act) {
+    int rows = z_node->matrix.size(), cols = z_node->matrix[0].size();
+    Mat result(rows, Vec(cols, 0.0));
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            result[r][c] = act->forward(z_node->matrix[r][c]);
+    auto res = make_shared<Matrix>(result, set<ElemPtr>{z_node}, "activation");
+    weak_ptr<Matrix> res_weak = res;
+    res->back = [res_weak, z_node, act]() {
+        auto res = res_weak.lock(); if (!res) return;
+        //Apply the scalar derivative element-wise, then multiply by the upstream gradient
+        int rows = z_node->matrix.size(), cols = z_node->matrix[0].size();
+        Mat deriv(rows, Vec(cols, 0.0));
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+                deriv[r][c] = act->derivative(z_node->matrix[r][c]);
+        z_node->gradient = matrix_addition_and_sub(z_node->gradient,
+            element_wise_multiplication(deriv, res->gradient), "add");
+    };
+    return res;
+}
 
 class Layer {
 public:
-    FunctionType function_type;
+    shared_ptr<ActivationFunction> activation;
     int neuron_num;
     int input_size;
     Mat parameters;
@@ -61,8 +110,8 @@ public:
     MatrixPtr z_node;
     MatrixPtr a_node;
 
-    Layer(int neuron_num, int input_size, FunctionType function_type) {
-        this->function_type = function_type;
+    Layer(int neuron_num, int input_size, shared_ptr<ActivationFunction> activation) {
+        this->activation = activation;
         this->neuron_num = neuron_num;
         this->input_size = input_size;
 
@@ -83,13 +132,6 @@ public:
         second_moment_bias.assign(neuron_num, Vec(1, 0.0));
     }
 
-    double execute_function(double input_val) {
-        ActivationFunctions functions;
-        if (function_type == FunctionType::RELU) return functions.ReLU(input_val);
-        if (function_type == FunctionType::SIGMOID) return functions.sigmoid(input_val);
-        return 0.0;
-    }
-
     Mat linearize(Mat params, Mat input, Mat b) {
         Mat product = matrix_with_matrix_multiplication(params, input);
         int cols = product[0].size();
@@ -100,22 +142,18 @@ public:
         return matrix_addition_and_sub(product, broadcasted, "add");
     }
 
-    Mat hypothesis(Mat linear, bool softmax = false) {
-        Mat linear_copy(linear.size(), Vec(linear[0].size(), 0.0));
-        for (int row = 0; row < (int)linear.size(); row++)
-            for (int col = 0; col < (int)linear[0].size(); col++)
-                linear_copy[row][col] = execute_function(linear[row][col]);
-
-        if (!softmax) return linear_copy;
-
+    //Only used for the output layer — applies softmax directly to the logits.
+    //Hidden layer activations go through apply_activation() in the autograd graph instead.
+    Mat softmax(Mat linear) {
+        Mat result(linear.size(), Vec(linear[0].size(), 0.0));
         for (int col = 0; col < (int)linear[0].size(); col++) {
-            double exponential_sum = 0.0;
+            double exp_sum = 0.0;
             for (int row = 0; row < (int)linear.size(); row++)
-                exponential_sum += exp(linear_copy[row][col]);
+                exp_sum += exp(linear[row][col]);
             for (int row = 0; row < (int)linear.size(); row++)
-                linear_copy[row][col] = exp(linear_copy[row][col]) / exponential_sum;
+                result[row][col] = exp(linear[row][col]) / exp_sum;
         }
-        return linear_copy;
+        return result;
     }
 };
 
@@ -229,18 +267,35 @@ public:
     Mat current_batch;
     double dropout_rate;
 
-    Network(int layer_num, vector<int> neurons_in_layers, Mat initial_input, FunctionType function_type, Optimizer* optimizer, double dropout_rate = 0.0) {
+    //function_type selects a predefined activation. Pass a custom ActivationFunction* to
+    //override it entirely — the custom pointer takes priority if both are provided.
+    Network(int layer_num, vector<int> neurons_in_layers, Mat initial_input,
+            FunctionType function_type, Optimizer* optimizer,
+            double dropout_rate = 0.0, ActivationFunction* custom_activation = nullptr) {
         this->number_of_layers = layer_num;
         this->neurons_in_layers = neurons_in_layers;
         this->initial_input = initial_input;
         this->optimizer = optimizer;
         this->dropout_rate = dropout_rate;
 
+        //Resolve activation: custom takes priority, otherwise use the predefined enum
+        shared_ptr<ActivationFunction> act;
+        if (custom_activation) {
+            //User manages lifetime of custom_activation — wrap with no-op deleter
+            act = shared_ptr<ActivationFunction>(custom_activation, [](ActivationFunction*){});
+        } else {
+            switch (function_type) {
+                case FunctionType::SIGMOID: act = make_shared<Sigmoid>(); break;
+                case FunctionType::TANH:    act = make_shared<Tanh>();    break;
+                default:                   act = make_shared<ReLU>();     break;
+            }
+        }
+
         for (int i = 0; i < number_of_layers; i++) {
             if (i == 0)
-                layers.push_back(Layer(neurons_in_layers[i], initial_input.size(), function_type));
+                layers.push_back(Layer(neurons_in_layers[i], initial_input.size(), act));
             else
-                layers.push_back(Layer(neurons_in_layers[i], neurons_in_layers[i - 1], function_type));
+                layers.push_back(Layer(neurons_in_layers[i], neurons_in_layers[i - 1], act));
         }
 
         //Create W_node and b_node once — they persist across batches.
@@ -305,13 +360,12 @@ public:
             //Softmax stays outside the graph because column-wise normalisation requires a
             //broadcast division that Matrix does not yet support. Its gradient fuses cleanly
             //with cross-entropy in backward() so nothing is lost by keeping it separate.
-            layer.a = layer.hypothesis(layer.z_node->matrix, true);
+            layer.a = layer.softmax(layer.z_node->matrix);
             return feedforward(layer_index + 1, make_shared<Matrix>(layer.a));
         } else {
-            //Activation is kept inside the graph so its local derivative is tracked automatically
-            MatrixPtr a_node = (layer.function_type == FunctionType::RELU)
-                ? static_pointer_cast<Matrix>(layer.z_node->relu())
-                : static_pointer_cast<Matrix>(layer.z_node->sigmoid());
+            //apply_activation wraps any ActivationFunction — predefined or custom — into
+            //a Matrix autograd node with the correct element-wise forward and backward pass.
+            MatrixPtr a_node = apply_activation(layer.z_node, layer.activation);
 
             //Dropout is applied inside the graph so the mask correctly zeroes out the same
             //positions during the backward pass via element_wise_mult's back()

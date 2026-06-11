@@ -25,6 +25,11 @@ except ImportError:
 
 from bare_metal_ml.knn import euclidean, manhattan, cosine
 from bare_metal_ml import linalg
+from bare_metal_ml.neural_network import (
+    Network, Adam, SGD,
+    FunctionType, ActivationFunction,
+    ReLU, Sigmoid, Tanh,
+)
 
 __all__ = [
     "GDA",
@@ -33,4 +38,7 @@ __all__ = [
     "KNN", "KDTree", "euclidean", "manhattan", "cosine",
     "GaussianNaiveBayes", "BernoulliNaiveBayes", "MultinomialNaiveBayes",
     "linalg",
+    "Network", "Adam", "SGD",
+    "FunctionType", "ActivationFunction",
+    "ReLU", "Sigmoid", "Tanh",
 ]

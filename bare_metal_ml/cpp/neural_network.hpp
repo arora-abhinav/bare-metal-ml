@@ -1,3 +1,4 @@
+#pragma once
 #include <cmath>
 #include <vector>
 #include <string>
@@ -7,27 +8,12 @@
 #include <iostream>
 #include <algorithm>
 #include <numeric>
-#include <cstdint>
-#include <sstream>
-#include "../../custom_math.cpp"
+#include "linalg.hpp"
 #include "autograd.hpp"
 
 using namespace std;
 typedef vector<double> Vec;
 typedef vector<vector<double>> Mat;
-
-uint32_t read_be_uint32(ifstream& f) {
-    uint8_t bytes[4];
-    f.read(reinterpret_cast<char*>(bytes), 4);
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) | ((uint32_t)bytes[2] << 8) | bytes[3];
-}
-
-Mat vectorize_labels(vector<uint8_t> input_labels, int class_number) {
-    Mat res(class_number, Vec(input_labels.size(), 0.0));
-    for (int i = 0; i < (int)input_labels.size(); i++)
-        res[input_labels[i]][i] = 1.0;
-    return res;
-}
 
 //Users inherit from ActivationFunction and implement forward() and derivative() at scalar level.
 //The framework applies both element-wise across the matrix automatically via apply_activation().
@@ -552,71 +538,3 @@ private:
         return result;
     }
 };
-
-int main(int argc, char** argv) {
-    ifstream img_file("MNIST handwritten /train-images-idx3-ubyte/train-images-idx3-ubyte", ios::binary);
-    uint32_t magic = read_be_uint32(img_file);
-    uint32_t num   = read_be_uint32(img_file);
-    uint32_t rows  = read_be_uint32(img_file);
-    uint32_t cols  = read_be_uint32(img_file);
-
-    vector<uint8_t> raw_images(num * rows * cols);
-    img_file.read(reinterpret_cast<char*>(raw_images.data()), raw_images.size());
-    img_file.close();
-
-    ifstream lbl_file("MNIST handwritten /train-labels-idx1-ubyte/train-labels-idx1-ubyte", ios::binary);
-    uint32_t lbl_magic = read_be_uint32(lbl_file);
-    uint32_t lbl_num   = read_be_uint32(lbl_file);
-
-    vector<uint8_t> labels(lbl_num);
-    lbl_file.read(reinterpret_cast<char*>(labels.data()), labels.size());
-    lbl_file.close();
-
-    Mat vectorized_labels = vectorize_labels(labels, 10);
-
-    int img_dimension = rows * cols;
-    Mat image_input_matrix(img_dimension, Vec(num, 0.0));
-    for (int column = 0; column < (int)num; column++)
-        for (int row = 0; row < img_dimension; row++)
-            image_input_matrix[row][column] = raw_images[column * img_dimension + row] / 255.0;
-
-    int num_examples = image_input_matrix[0].size();
-    int train_size = (int)(0.666666 * num_examples);
-
-    vector<int> indices(num_examples);
-    iota(indices.begin(), indices.end(), 0);
-    mt19937 gen(random_device{}());
-    shuffle(indices.begin(), indices.end(), gen);
-
-    vector<int> train_indices(indices.begin(), indices.begin() + train_size);
-    vector<int> test_indices(indices.begin() + train_size, indices.end());
-
-    Mat x_train(image_input_matrix.size(), Vec(train_size, 0.0));
-    Mat x_test(image_input_matrix.size(), Vec(test_indices.size(), 0.0));
-    for (int row = 0; row < (int)image_input_matrix.size(); row++) {
-        for (int i = 0; i < train_size; i++)
-            x_train[row][i] = image_input_matrix[row][train_indices[i]];
-        for (int i = 0; i < (int)test_indices.size(); i++)
-            x_test[row][i] = image_input_matrix[row][test_indices[i]];
-    }
-
-    Mat y_train(vectorized_labels.size(), Vec(train_size, 0.0));
-    Mat y_test(vectorized_labels.size(), Vec(test_indices.size(), 0.0));
-    for (int row = 0; row < (int)vectorized_labels.size(); row++) {
-        for (int i = 0; i < train_size; i++)
-            y_train[row][i] = vectorized_labels[row][train_indices[i]];
-        for (int i = 0; i < (int)test_indices.size(); i++)
-            y_test[row][i] = vectorized_labels[row][test_indices[i]];
-    }
-
-    Adam adam(0.001);
-    Network MNIST_Network(5, {512, 256, 128, 64, 10}, x_train, FunctionType::RELU, &adam, 0.3);
-    MNIST_Network.train_loop(50, y_train, 128);
-
-    //Important to set dropout_rate to 0
-    MNIST_Network.dropout_rate = 0;
-    double accuracy = MNIST_Network.test_accuracy(x_test, y_test);
-    cout << "Test accuracy: " << accuracy << "%" << endl;
-
-    return 0;
-}

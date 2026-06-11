@@ -162,11 +162,11 @@ def sum_across_column(matrix):
 
 #Multiples a scalar with a matrix
 def scalar_multiply_matrix(matrix, scalar):
+    res = [[0] * len(matrix[0]) for _ in range(len(matrix))]
     for row in range(len(matrix)):
         for col in range(len(matrix[0])):
-            matrix[row][col] *= scalar
-    
-    return matrix
+            res[row][col] = matrix[row][col] * scalar
+    return res
 
 #Matrix addition and subtraction
 def matrix_addition_and_sub(matrix_one, matrix_two, operation):
@@ -201,7 +201,7 @@ def element_wise_roots(matrix, root_of):
     res = [[0] * len(matrix[0]) for _ in range(len(matrix))]
     for row in range(len(matrix)):
         for col in range(len(matrix[0])):
-            res[row][col] = (matrix[row][col])^(1/root_of)
+            res[row][col] = (matrix[row][col]) ** (1/root_of)
     
     return res
 

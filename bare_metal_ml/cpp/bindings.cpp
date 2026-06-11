@@ -1,15 +1,102 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/functional.h>
 #include "gda.hpp"
 #include "linear_regression.hpp"
 #include "logistic_regression.hpp"
 #include "knn.hpp"
 #include "naive_bayes.hpp"
+#include "neural_network.hpp"
 
 namespace py = pybind11;
 
+//Trampoline class — lets Python subclass ActivationFunction and override forward() and derivative().
+//PYBIND11_OVERRIDE_PURE calls back into Python when the virtual method is invoked from C++,
+//so custom activations defined in Python work transparently inside the C++ training loop.
+struct PyActivationFunction : ActivationFunction {
+    using ActivationFunction::ActivationFunction;
+    double forward(double x) override {
+        PYBIND11_OVERRIDE_PURE(double, ActivationFunction, forward, x);
+    }
+    double derivative(double x) override {
+        PYBIND11_OVERRIDE_PURE(double, ActivationFunction, derivative, x);
+    }
+};
+
 PYBIND11_MODULE(_cpp, m) {
     m.doc() = "bare-metal-ml C++ backend";
+
+    // ── ActivationFunction ────────────────────────────────────────────────────
+    //Exposed with the PyActivationFunction trampoline so Python can subclass it.
+    //Subclass, override forward() and derivative() as scalar element-wise functions,
+    //and pass an instance to Network(..., custom_activation=my_act).
+    py::class_<ActivationFunction, PyActivationFunction>(m, "ActivationFunction")
+        .def(py::init<>())
+        .def("forward",     &ActivationFunction::forward)
+        .def("derivative",  &ActivationFunction::derivative);
+
+    py::class_<ReLU, ActivationFunction>(m, "ReLU")
+        .def(py::init<>());
+
+    py::class_<Sigmoid, ActivationFunction>(m, "Sigmoid")
+        .def(py::init<>());
+
+    py::class_<Tanh, ActivationFunction>(m, "Tanh")
+        .def(py::init<>());
+
+    py::enum_<FunctionType>(m, "FunctionType")
+        .value("RELU",    FunctionType::RELU)
+        .value("SIGMOID", FunctionType::SIGMOID)
+        .value("TANH",    FunctionType::TANH)
+        .export_values();
+
+    // ── Optimizers ────────────────────────────────────────────────────────────
+    py::class_<Adam>(m, "Adam")
+        .def(py::init<double>(), py::arg("learning_rate") = 0.001)
+        .def_readwrite("learning_rate", &Adam::learning_rate);
+
+    py::class_<SGD>(m, "SGD")
+        .def(py::init<double>(), py::arg("learning_rate") = 0.01)
+        .def_readwrite("learning_rate", &SGD::learning_rate);
+
+    // ── Network ───────────────────────────────────────────────────────────────
+    //py::keep_alive<1,6> keeps the optimizer Python object alive for the lifetime
+    //of the Network, since Network stores a raw Optimizer* internally.
+    //py::keep_alive<1,8> does the same for a custom ActivationFunction instance.
+    py::class_<Network>(m, "Network")
+        .def(py::init([](int layer_num, vector<int> neurons, Mat x_train,
+                         FunctionType ft, Adam* adam,
+                         double dropout, ActivationFunction* custom_act) {
+                return new Network(layer_num, neurons, x_train, ft, adam, dropout, custom_act);
+             }),
+             py::arg("layer_num"), py::arg("neurons_in_layers"), py::arg("initial_input"),
+             py::arg("function_type") = FunctionType::RELU,
+             py::arg("optimizer"),
+             py::arg("dropout_rate") = 0.0,
+             py::arg("custom_activation") = nullptr,
+             py::keep_alive<1, 6>(),
+             py::keep_alive<1, 8>())
+        .def(py::init([](int layer_num, vector<int> neurons, Mat x_train,
+                         FunctionType ft, SGD* sgd,
+                         double dropout, ActivationFunction* custom_act) {
+                return new Network(layer_num, neurons, x_train, ft, sgd, dropout, custom_act);
+             }),
+             py::arg("layer_num"), py::arg("neurons_in_layers"), py::arg("initial_input"),
+             py::arg("function_type") = FunctionType::RELU,
+             py::arg("optimizer"),
+             py::arg("dropout_rate") = 0.0,
+             py::arg("custom_activation") = nullptr,
+             py::keep_alive<1, 6>(),
+             py::keep_alive<1, 8>())
+        .def("train_loop",    &Network::train_loop,
+             py::arg("epochs"), py::arg("train_labels"), py::arg("batch_size"))
+        .def("accuracy",      &Network::test_accuracy,
+             py::arg("x_test"), py::arg("y_test"))
+        .def("save_weights",  &Network::save_weights,
+             py::arg("path") = "weights.json")
+        .def("load_weights",  &Network::load_weights,
+             py::arg("path") = "weights.json")
+        .def_readwrite("dropout_rate", &Network::dropout_rate);
 
     // ── GDA ──────────────────────────────────────────────────────────────────
     py::class_<GDA>(m, "GDA")

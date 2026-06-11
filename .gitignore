@@ -18,6 +18,15 @@ venv/
 .vscode/
 .idea/
 
+# Build artifacts
+*.egg-info/
+*.so
+build/
+dist/
+
+# Debug symbols
+*.dSYM/
+
 # Excluded directories
 Machine Learning Framework/
 .claude/

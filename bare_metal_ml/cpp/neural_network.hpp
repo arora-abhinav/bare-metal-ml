@@ -2,6 +2,7 @@
 #include <cmath>
 #include <vector>
 #include <string>
+#include <map>
 #include <random>
 #include <functional>
 #include <fstream>
@@ -82,19 +83,24 @@ public:
     shared_ptr<ActivationFunction> activation;
     int neuron_num;
     int input_size;
-    Mat parameters;
-    Mat bias;
-    Mat z;
-    Mat a;
     Mat first_moment_weight;
     Mat second_moment_weight;
     Mat first_moment_bias;
     Mat second_moment_bias;
     Mat dropout_mask;
+    //W_node and b_node are created once and live for the lifetime of the layer.
+    //feedforward zeroes their gradients each batch; the optimizer updates .matrix directly.
+    //This makes layer.parameters and layer.bias unnecessary — W_node->matrix IS the weights.
     MatrixPtr W_node;
     MatrixPtr b_node;
     MatrixPtr z_node;
     MatrixPtr a_node;
+    MatrixPtr input_node;
+    MatrixPtr b_broadcast;
+    MatrixPtr matmul_node;
+    MatrixPtr act_node;
+    MatrixPtr mask_node;
+    MatrixPtr elt_mult_node;
 
     Layer(int neuron_num, int input_size, shared_ptr<ActivationFunction> activation) {
         this->activation = activation;
@@ -105,12 +111,16 @@ public:
         double he_std = sqrt(2.0 / input_size);
         normal_distribution<double> gauss(0.0, he_std);
 
-        parameters.resize(neuron_num, Vec(input_size));
+        Mat weights(neuron_num, Vec(input_size));
         for (int i = 0; i < neuron_num; i++)
             for (int j = 0; j < input_size; j++)
-                parameters[i][j] = gauss(gen);
+                weights[i][j] = gauss(gen);
+        W_node = make_shared<Matrix>(weights);
+        W_node->gradient = Mat(neuron_num, Vec(input_size, 0.0));
 
-        bias.resize(neuron_num, Vec(1, 0.0));
+        Mat biases(neuron_num, Vec(1, 0.0));
+        b_node = make_shared<Matrix>(biases);
+        b_node->gradient = Mat(neuron_num, Vec(1, 0.0));
 
         first_moment_weight.assign(neuron_num, Vec(input_size, 0.0));
         second_moment_weight.assign(neuron_num, Vec(input_size, 0.0));
@@ -212,19 +222,19 @@ public:
             Mat m_hat_b = scalar_multiply_matrix(layers[i].first_moment_bias, 1.0 / bias_corr1);
             Mat v_hat_b = scalar_multiply_matrix(layers[i].second_moment_bias, 1.0 / bias_corr2);
 
-            // Update weights: params -= lr * m_hat / (sqrt(v_hat) + eps)
+            // Update weights: W_node->matrix -= lr * m_hat / (sqrt(v_hat) + eps)
             Mat root_v_w = element_wise_roots(v_hat_w, 2.0);
             Mat eps_w(root_v_w.size(), Vec(root_v_w[0].size(), 1e-8));
             Mat denom_w = matrix_addition_and_sub(root_v_w, eps_w, "add");
             Mat step_w = scalar_multiply_matrix(element_wise_division_two_matrices(m_hat_w, denom_w), learning_rate);
-            layers[i].parameters = matrix_addition_and_sub(layers[i].parameters, step_w, "sub");
+            layers[i].W_node->matrix = matrix_addition_and_sub(layers[i].W_node->matrix, step_w, "sub");
 
             // Update bias
             Mat root_v_b = element_wise_roots(v_hat_b, 2.0);
             Mat eps_b(root_v_b.size(), Vec(root_v_b[0].size(), 1e-8));
             Mat denom_b = matrix_addition_and_sub(root_v_b, eps_b, "add");
             Mat step_b = scalar_multiply_matrix(element_wise_division_two_matrices(m_hat_b, denom_b), learning_rate);
-            layers[i].bias = matrix_addition_and_sub(layers[i].bias, step_b, "sub");
+            layers[i].b_node->matrix = matrix_addition_and_sub(layers[i].b_node->matrix, step_b, "sub");
         }
     }
 };
@@ -237,8 +247,8 @@ public:
         for (int i = 0; i < (int)layers.size(); i++) {
             Mat step_w = scalar_multiply_matrix(dw[i], learning_rate);
             Mat step_b = scalar_multiply_matrix(db[i], learning_rate);
-            layers[i].parameters = matrix_addition_and_sub(layers[i].parameters, step_w, "sub");
-            layers[i].bias = matrix_addition_and_sub(layers[i].bias, step_b, "sub");
+            layers[i].W_node->matrix = matrix_addition_and_sub(layers[i].W_node->matrix, step_w, "sub");
+            layers[i].b_node->matrix = matrix_addition_and_sub(layers[i].b_node->matrix, step_b, "sub");
         }
     }
 };
@@ -250,8 +260,12 @@ public:
     Mat initial_input;
     vector<Layer> layers;
     Optimizer* optimizer;
-    Mat current_batch;
     double dropout_rate;
+    string weights_dir;
+    //sorted_graph holds ElemPtr so nodes stay alive across batches —
+    //raw Element* would dangle once feedforward recreates intermediate nodes each batch
+    vector<ElemPtr> sorted_graph;
+    map<pair<int,string>, int> node_index_map;
 
     //function_type selects a predefined activation. Pass a custom ActivationFunction* to
     //override it entirely — the custom pointer takes priority if both are provided.
@@ -283,14 +297,6 @@ public:
             else
                 layers.push_back(Layer(neurons_in_layers[i], neurons_in_layers[i - 1], act));
         }
-
-        //Create W_node and b_node once — they persist across batches.
-        //Each batch only resets their gradients and syncs the matrix data from layer.parameters/bias
-        //after the optimizer updates them, avoiding a full heap allocation + copy per batch.
-        for (auto& layer : layers) {
-            layer.W_node = make_shared<Matrix>(layer.parameters);
-            layer.b_node = make_shared<Matrix>(layer.bias);
-        }
     }
 
     //Expands the (neuron_num x 1) bias into (neuron_num x batch_size) so it can be added to
@@ -318,8 +324,9 @@ public:
     }
 
     //Forward pass builds the computation graph using Matrix nodes instead of raw lists.
-    //Each layer's parameters and bias are wrapped as leaf Matrix nodes so their gradients are
-    //automatically populated when backprop() runs backward through the graph.
+    //W_node and b_node are persistent — their gradients are zeroed here instead of recreating them.
+    //Every other intermediate node is recreated each batch and stored on the layer so
+    //_build_node_index_map and _update_sorted_graph can slot them into the cached sorted_graph.
     void feedforward(int layer_index, MatrixPtr input_node) {
         if (layer_index >= (int)layers.size()) return;
 
@@ -327,31 +334,34 @@ public:
         bool is_last = (layer_index == (int)layers.size() - 1);
         int batch_size = input_node->matrix[0].size();
 
-        //Sync latest parameter values, reset gradients, and clear stale graph edges
-        //from the previous batch so old nodes are freed and don't accumulate in memory.
-        layer.W_node->matrix   = layer.parameters;
+        //W_node and b_node persist — zero their gradients so back() accumulates into a clean slate
         layer.W_node->gradient = Mat(layer.neuron_num, Vec(layer.input_size, 0.0));
-        layer.W_node->children = {};
-        layer.b_node->matrix   = layer.bias;
         layer.b_node->gradient = Mat(layer.neuron_num, Vec(1, 0.0));
-        layer.b_node->children = {};
+        layer.input_node = input_node;
 
         //z = W @ X + b_broadcast — each operation creates a node that records its children
         MatrixPtr b_broadcast = broadcast_bias(layer.b_node, batch_size);
+        layer.b_broadcast = b_broadcast;
+
         MatrixPtr matmul_node = static_pointer_cast<Matrix>(layer.W_node->mul(input_node));
-        layer.z_node          = static_pointer_cast<Matrix>(matmul_node->add(b_broadcast));
-        layer.z               = layer.z_node->matrix;
+        matmul_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
+        layer.matmul_node = matmul_node;
+
+        MatrixPtr z_node = static_pointer_cast<Matrix>(matmul_node->add(b_broadcast));
+        z_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
+        layer.z_node = z_node;
 
         if (is_last) {
             //Softmax stays outside the graph because column-wise normalisation requires a
             //broadcast division that Matrix does not yet support. Its gradient fuses cleanly
             //with cross-entropy in backward() so nothing is lost by keeping it separate.
-            layer.a = layer.softmax(layer.z_node->matrix);
-            return feedforward(layer_index + 1, make_shared<Matrix>(layer.a));
+            layer.a_node = make_shared<Matrix>(layer.softmax(z_node->matrix));
+            return feedforward(layer_index + 1, layer.a_node);
         } else {
             //apply_activation wraps any ActivationFunction — predefined or custom — into
             //a Matrix autograd node with the correct element-wise forward and backward pass.
             MatrixPtr a_node = apply_activation(layer.z_node, layer.activation);
+            layer.act_node = a_node;
 
             //Dropout is applied inside the graph so the mask correctly zeroes out the same
             //positions during the backward pass via element_wise_mult's back()
@@ -363,14 +373,64 @@ public:
                     for (int c = 0; c < batch_size; c++)
                         mask_data[r][c] = dist(rng) >= dropout_rate ? 1.0 : 0.0;
                 auto mask_node = make_shared<Matrix>(mask_data);
+                layer.mask_node = mask_node;
                 a_node = a_node->element_wise_mult(mask_node);
+                layer.elt_mult_node = a_node;
                 a_node = a_node->scalar_multiply(1.0 / (1.0 - dropout_rate));
                 a_node->gradient = Mat(layer.neuron_num, Vec(batch_size, 0.0));
+            } else {
+                layer.mask_node = nullptr;
+                layer.elt_mult_node = nullptr;
             }
 
             layer.a_node = a_node;
-            layer.a = a_node->matrix;
             return feedforward(layer_index + 1, a_node);
+        }
+    }
+
+    //Runs once after the first backward pass. Walks sorted_graph and matches each node
+    //to its role (layer index + attr name) via pointer identity, recording the position.
+    //W_node and b_node are excluded — they're persistent so their positions never need updating.
+    void _build_node_index_map() {
+        map<Element*, pair<int,string>> id_to_role;
+        auto reg = [&](int i, const string& attr, MatrixPtr node) {
+            if (node) id_to_role[node.get()] = {i, attr};
+        };
+        for (int i = 0; i < (int)layers.size(); i++) {
+            reg(i, "input_node",    layers[i].input_node);
+            reg(i, "b_broadcast",   layers[i].b_broadcast);
+            reg(i, "matmul_node",   layers[i].matmul_node);
+            reg(i, "z_node",        layers[i].z_node);
+            reg(i, "act_node",      layers[i].act_node);
+            reg(i, "mask_node",     layers[i].mask_node);
+            reg(i, "elt_mult_node", layers[i].elt_mult_node);
+            reg(i, "a_node",        layers[i].a_node);
+        }
+        node_index_map.clear();
+        for (int idx = 0; idx < (int)sorted_graph.size(); idx++) {
+            auto it = id_to_role.find(sorted_graph[idx].get());
+            if (it != id_to_role.end())
+                node_index_map[it->second] = idx;
+        }
+    }
+
+    //Runs every batch after the first. Uses the recorded positions to slot the freshly
+    //created node objects directly into sorted_graph — no traversal or re-sort needed.
+    void _update_sorted_graph() {
+        for (auto& kv : node_index_map) {
+            int layer_idx = kv.first.first;
+            const string& attr = kv.first.second;
+            int idx = kv.second;
+            MatrixPtr node;
+            if      (attr == "input_node")    node = layers[layer_idx].input_node;
+            else if (attr == "b_broadcast")   node = layers[layer_idx].b_broadcast;
+            else if (attr == "matmul_node")   node = layers[layer_idx].matmul_node;
+            else if (attr == "z_node")        node = layers[layer_idx].z_node;
+            else if (attr == "act_node")      node = layers[layer_idx].act_node;
+            else if (attr == "mask_node")     node = layers[layer_idx].mask_node;
+            else if (attr == "elt_mult_node") node = layers[layer_idx].elt_mult_node;
+            else if (attr == "a_node")        node = layers[layer_idx].a_node;
+            if (node) sorted_graph[idx] = node;
         }
     }
 
@@ -390,7 +450,7 @@ public:
     //propagates it backward through every previous layer automatically via each node's back() closure.
     void backward(Mat batch_labels) {
         int m = batch_labels[0].size();
-        Mat& y_hat = layers.back().a;
+        Mat& y_hat = layers.back().a_node->matrix;
         Mat combined_gradient(y_hat.size(), Vec(y_hat[0].size(), 0.0));
         for (int r = 0; r < (int)y_hat.size(); r++)
             for (int c = 0; c < (int)y_hat[0].size(); c++)
@@ -398,7 +458,15 @@ public:
 
         //Seed the gradient at the last layer's z_node and let the graph do the rest
         layers.back().z_node->gradient = combined_gradient;
-        layers.back().z_node->backprop();
+        //First batch: sort the graph and record each node's position in the index map
+        //Every subsequent batch: slot fresh nodes into those positions — no re-sort
+        if (sorted_graph.empty()) {
+            sorted_graph = layers.back().z_node->topo_sort();
+            _build_node_index_map();
+        } else {
+            _update_sorted_graph();
+        }
+        layers.back().z_node->backprop(sorted_graph);
     }
 
     void train_loop(int epochs, Mat train_labels, int batch_size) {
@@ -424,12 +492,10 @@ public:
                     for (int j = 0; j < batch_size; j++)
                         batch_labels[row][j] = train_labels[row][indices[start + j]];
 
-                //Forward pass — builds the computation graph for this batch.
-                //Constructor auto-initialises input_node gradient to zeros so mul's back()
-                //can safely accumulate into it even though we don't need dL/dX for the input.
+                //Forward pass — builds the computation graph for this batch
                 feedforward(0, make_shared<Matrix>(batch_input));
 
-                double current_loss = total_loss(layers.back().a, [&](Vec y_hat, Vec y) {
+                double current_loss = total_loss(layers.back().a_node->matrix, [&](Vec y_hat, Vec y) {
                     return loss_fn.cross_entropy_loss(y_hat, y);
                 }, batch_labels);
                 cout << "Epoch " << epoch << ", Batch " << b << ", Loss: " << current_loss << endl;
@@ -451,8 +517,14 @@ public:
     }
 
     double test_accuracy(Mat x_test, Mat y_test) {
+        double saved = dropout_rate;
+        dropout_rate = 0.0;
         feedforward(0, make_shared<Matrix>(x_test));
-        Mat output = layers.back().a;
+        dropout_rate = saved;
+        //Graph structure changed (no dropout nodes) so invalidate the cache
+        sorted_graph.clear();
+        node_index_map.clear();
+        Mat output = layers.back().a_node->matrix;
         int correct = 0;
         for (int col = 0; col < (int)output[0].size(); col++) {
             int pred = 0;
@@ -466,36 +538,57 @@ public:
         return (double)correct / output[0].size() * 100.0;
     }
 
+    vector<int> predict(Mat x_test) {
+        double saved = dropout_rate;
+        dropout_rate = 0.0;
+        feedforward(0, make_shared<Matrix>(x_test));
+        dropout_rate = saved;
+        //Graph structure changed (no dropout nodes) so invalidate the cache
+        sorted_graph.clear();
+        node_index_map.clear();
+        Mat output = layers.back().a_node->matrix;
+        vector<int> preds;
+        for (int col = 0; col < (int)output[0].size(); col++) {
+            int pred = 0;
+            for (int row = 1; row < (int)output.size(); row++)
+                if (output[row][col] > output[pred][col]) pred = row;
+            preds.push_back(pred);
+        }
+        return preds;
+    }
+
     //Writes all layer weights and biases to a JSON file.
     //Format matches the Python save_weights so files are interchangeable between runtimes.
-    void save_weights(const string& path = "weights.json") const {
-        ofstream f(path);
+    void save_weights(const string& path = "") const {
+        const string& p = !path.empty() ? path : (!weights_dir.empty() ? weights_dir : "weights.json");
+        ofstream f(p);
         f << "[";
         for (int i = 0; i < (int)layers.size(); i++) {
             f << "{\"parameters\":";
-            _write_mat(f, layers[i].parameters);
+            _write_mat(f, layers[i].W_node->matrix);
             f << ",\"bias\":";
-            _write_mat(f, layers[i].bias);
+            _write_mat(f, layers[i].b_node->matrix);
             f << "}";
             if (i < (int)layers.size() - 1) f << ",";
         }
         f << "]";
     }
 
-    //Reads a file written by save_weights and restores each layer's parameters and bias.
+    //Reads a file written by save_weights and restores each layer's weights and biases.
     //The network architecture must match the saved one.
-    void load_weights(const string& path = "weights.json") {
-        ifstream f(path);
+    void load_weights(const string& path = "") {
+        const string& p = !path.empty() ? path : (!weights_dir.empty() ? weights_dir : "weights.json");
+        ifstream f(p);
         string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
         size_t pos = 0;
         while (pos < s.size() && s[pos] != '{') pos++;
         for (auto& layer : layers) {
             pos = s.find("\"parameters\"", pos) + 12;
             while (s[pos] != '[') pos++;
-            layer.parameters = _parse_mat(s, pos);
+            layer.W_node->matrix = _parse_mat(s, pos);
             pos = s.find("\"bias\"", pos) + 6;
             while (s[pos] != '[') pos++;
-            layer.bias = _parse_mat(s, pos);
+            layer.b_node->matrix = _parse_mat(s, pos);
         }
     }
 

@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools", "pybind11>=2.10"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "bare-metal-ml"

@@ -69,7 +69,7 @@ class TopologicalSort():
         pass
     #This is to prevent calling backprop manually. Kahns topological sort flattens the graph into a list that can be traversed in order
     #That way back can be called in the correct order
-    def backprop(self, root_node:Element):
+    def topological_sort(self, root_node:Element):
         num_dependancies = {}
         
         def collect_nodes(node:Element):
@@ -103,8 +103,15 @@ class TopologicalSort():
                     if num_dependancies[c] == 0:
                         q.append(c)
         
-        for n in final_res:
-            n.back()
+        return final_res
+    
+    #Separated out the backprop and the topological sort since the topological sort is only required once
+    #The backprop must be actually called for each epoch, not the topological sort. The topological sort will be 
+    #cached in the network
+    def backprop(final_res):
+        for node in final_res:
+            node.back()
+
 
 #Using a scalar class that represents the node in each graph for any kind of mathematical equation
 #The whole point of the autograd is that each sort of individual operation has its own unique way of taking the derivative
@@ -123,6 +130,7 @@ class Scalar(Element):
         self.back = lambda: None
         #By default, the gradient is taken of a final expression that will be specified
         self.gradient = 0
+        self.topo = TopologicalSort()
     
     #Building out the basic operations.
     def __add__(self, other:Scalar):
@@ -247,9 +255,11 @@ class Scalar(Element):
     def __rtruediv__(self, other):
         return Scalar(other) / self
     
-    def backprop(self):
-        topo = TopologicalSort()
-        topo.backprop(self)
+    def topo_sort(self):
+        self.topo.topological_sort(self)
+    
+    def backprop(self, sorted_graph):
+        self.topo.backprop(sorted_graph)
 
 #Support for tensors (matrices for now) instead of just scalar values.
 #The core idea is identical to the Scalar class — each Matrix node records which operation
@@ -266,6 +276,7 @@ class Matrix(Element):
         self.back = lambda: None
         #By default, the gradient is taken of a final expression that will be specified
         self.gradient = 0
+        self.topo = TopologicalSort()
 
     #Building out the basic operations.
     def __add__(self, other:Matrix):
@@ -433,6 +444,8 @@ class Matrix(Element):
         res.back = back
         return res
     
-    def backprop(self):
-        topo = TopologicalSort()
-        topo.backprop(self)
+    def topo_sort(self):
+        self.topo.topological_sort(self)
+    
+    def backprop(self, sorted_graph):
+        self.topo.backprop(sorted_graph)

@@ -26,6 +26,87 @@ struct PyActivationFunction : ActivationFunction {
 PYBIND11_MODULE(_cpp, m) {
     m.doc() = "bare-metal-ml C++ backend";
 
+    // ── linalg ────────────────────────────────────────────────────────────────
+    m.def("matrix_with_matrix_multiplication",    &matrix_with_matrix_multiplication);
+    m.def("matrix_addition_and_sub",              &matrix_addition_and_sub);
+    m.def("scalar_multiply_matrix",               &scalar_multiply_matrix);
+    m.def("element_wise_multiplication",          &element_wise_multiplication);
+    m.def("element_wise_division_two_matrices",   &element_wise_division_two_matrices);
+    m.def("element_wise_roots",                   &element_wise_roots);
+    m.def("transpose_matrix",                     &transpose_matrix);
+    m.def("ReLU_derivative",                      &ReLU_derivative);
+    m.def("sum_across_column",                    &sum_across_column);
+    m.def("matrix_product_from_vector_and_transpose", &matrix_product_from_vector_and_transpose);
+    m.def("calculate_vector",                     &calculate_vector);
+    m.def("LU_decomposition",                     &LU_decomposition);
+    m.def("calculate_determinant",                &calculate_determinant);
+    m.def("matrix_inverse",                       &matrix_inverse);
+    m.def("matrix_product_with_matrix_and_vector",&matrix_product_with_matrix_and_vector);
+    m.def("scalar_product_from_transpose_and_vector", &scalar_product_from_transpose_and_vector);
+    m.def("regularize",                           &regularize);
+
+    // ── distance metrics ──────────────────────────────────────────────────────
+    m.def("euclidean", &euclidean);
+    m.def("manhattan", &manhattan);
+    m.def("cosine",    &cosine);
+
+    // ── autograd ──────────────────────────────────────────────────────────────
+    py::class_<Element, shared_ptr<Element>>(m, "Element")
+        .def_readonly("operation", &Element::operation);
+
+    py::class_<Scalar, Element, shared_ptr<Scalar>>(m, "Scalar")
+        .def(py::init<double>(), py::arg("digit"))
+        .def_readwrite("digit",     &Scalar::digit)
+        .def_readwrite("gradient",  &Scalar::gradient)
+        .def("__add__",      [](shared_ptr<Scalar> s, shared_ptr<Scalar> o) {
+            return static_pointer_cast<Scalar>(s->add(o)); })
+        .def("__mul__",      [](shared_ptr<Scalar> s, shared_ptr<Scalar> o) {
+            return static_pointer_cast<Scalar>(s->mul(o)); })
+        .def("__sub__",      [](shared_ptr<Scalar> s, shared_ptr<Scalar> o) {
+            return static_pointer_cast<Scalar>(s->sub(o)); })
+        .def("__truediv__",  [](shared_ptr<Scalar> s, shared_ptr<Scalar> o) {
+            return static_pointer_cast<Scalar>(s->truediv(o)); })
+        .def("__neg__",      [](shared_ptr<Scalar> s) {
+            return static_pointer_cast<Scalar>(s->neg()); })
+        .def("relu",         [](shared_ptr<Scalar> s) { return static_pointer_cast<Scalar>(s->relu()); })
+        .def("sigmoid",      [](shared_ptr<Scalar> s) { return static_pointer_cast<Scalar>(s->sigmoid()); })
+        .def("tanh_op",      [](shared_ptr<Scalar> s) { return static_pointer_cast<Scalar>(s->tanh_op()); })
+        .def("exp_op",       [](shared_ptr<Scalar> s) { return static_pointer_cast<Scalar>(s->exp_op()); })
+        .def("log_op",       [](shared_ptr<Scalar> s) { return static_pointer_cast<Scalar>(s->log_op()); })
+        .def("pow_op",       &Scalar::pow_op)
+        .def("__radd__",     [](shared_ptr<Scalar> s, double o) { return s->radd(o); })
+        .def("__rmul__",     [](shared_ptr<Scalar> s, double o) { return s->rmul(o); })
+        .def("__rsub__",     [](shared_ptr<Scalar> s, double o) { return s->rsub(o); })
+        .def("__rtruediv__", [](shared_ptr<Scalar> s, double o) { return s->rdiv(o); })
+        .def("topo_sort",    &Scalar::topo_sort)
+        .def("backprop",     [](shared_ptr<Scalar> s, vector<ElemPtr> g) { s->backprop(g); });
+
+    py::class_<Matrix, Element, shared_ptr<Matrix>>(m, "Matrix")
+        .def(py::init<Mat>(), py::arg("matrix"))
+        .def_readwrite("matrix",    &Matrix::matrix)
+        .def_readwrite("gradient",  &Matrix::gradient)
+        .def("__add__",         [](shared_ptr<Matrix> s, shared_ptr<Matrix> o) {
+            return static_pointer_cast<Matrix>(s->add(o)); })
+        .def("__mul__",         [](shared_ptr<Matrix> s, shared_ptr<Matrix> o) {
+            return static_pointer_cast<Matrix>(s->mul(o)); })
+        .def("__sub__",         [](shared_ptr<Matrix> s, shared_ptr<Matrix> o) {
+            return static_pointer_cast<Matrix>(s->sub(o)); })
+        .def("__truediv__",     [](shared_ptr<Matrix> s, shared_ptr<Matrix> o) {
+            return static_pointer_cast<Matrix>(s->truediv(o)); })
+        .def("__neg__",         [](shared_ptr<Matrix> s) {
+            return static_pointer_cast<Matrix>(s->neg()); })
+        .def("relu",            [](shared_ptr<Matrix> s) { return static_pointer_cast<Matrix>(s->relu()); })
+        .def("sigmoid",         [](shared_ptr<Matrix> s) { return static_pointer_cast<Matrix>(s->sigmoid()); })
+        .def("tanh_op",         [](shared_ptr<Matrix> s) { return static_pointer_cast<Matrix>(s->tanh_op()); })
+        .def("exp_op",          [](shared_ptr<Matrix> s) { return static_pointer_cast<Matrix>(s->exp_op()); })
+        .def("log_op",          [](shared_ptr<Matrix> s) { return static_pointer_cast<Matrix>(s->log_op()); })
+        .def("element_wise_mult", &Matrix::element_wise_mult)
+        .def("scalar_multiply",   &Matrix::scalar_multiply)
+        .def("transpose_op",      &Matrix::transpose_op)
+        .def("sum_cols",          &Matrix::sum_cols)
+        .def("topo_sort",         &Matrix::topo_sort)
+        .def("backprop",          [](shared_ptr<Matrix> s, vector<ElemPtr> g) { s->backprop(g); });
+
     // ── ActivationFunction ────────────────────────────────────────────────────
     //Exposed with the PyActivationFunction trampoline so Python can subclass it.
     //Subclass, override forward() and derivative() as scalar element-wise functions,
@@ -60,38 +141,48 @@ PYBIND11_MODULE(_cpp, m) {
         .def_readwrite("learning_rate", &SGD::learning_rate);
 
     // ── Network ───────────────────────────────────────────────────────────────
-    //py::keep_alive<1,6> keeps the optimizer Python object alive for the lifetime
-    //of the Network, since Network stores a raw Optimizer* internally.
-    //py::keep_alive<1,8> does the same for a custom ActivationFunction instance.
+    //Arg order matches the Python Network API: optimizer before dropout_rate before function_type.
+    //keep_alive<1,5> keeps optimizer alive (5th arg after self,layer_num,neurons,x_train).
+    //keep_alive<1,8> keeps activation alive (8th arg after ...,dropout,function_type,activation).
     py::class_<Network>(m, "Network")
         .def(py::init([](int layer_num, vector<int> neurons, Mat x_train,
-                         FunctionType ft, Adam* adam,
-                         double dropout, ActivationFunction* custom_act) {
-                return new Network(layer_num, neurons, x_train, ft, adam, dropout, custom_act);
+                         Adam* adam, double dropout,
+                         FunctionType ft, ActivationFunction* custom_act,
+                         string weights_dir) {
+                auto* net = new Network(layer_num, neurons, x_train, ft, adam, dropout, custom_act);
+                net->weights_dir = weights_dir;
+                return net;
              }),
              py::arg("layer_num"), py::arg("neurons_in_layers"), py::arg("initial_input"),
-             py::arg("function_type") = FunctionType::RELU,
              py::arg("optimizer"),
              py::arg("dropout_rate") = 0.0,
-             py::arg("custom_activation") = nullptr,
-             py::keep_alive<1, 6>(),
+             py::arg("function_type") = FunctionType::RELU,
+             py::arg("activation") = nullptr,
+             py::arg("weights_dir") = "",
+             py::keep_alive<1, 5>(),
              py::keep_alive<1, 8>())
         .def(py::init([](int layer_num, vector<int> neurons, Mat x_train,
-                         FunctionType ft, SGD* sgd,
-                         double dropout, ActivationFunction* custom_act) {
-                return new Network(layer_num, neurons, x_train, ft, sgd, dropout, custom_act);
+                         SGD* sgd, double dropout,
+                         FunctionType ft, ActivationFunction* custom_act,
+                         string weights_dir) {
+                auto* net = new Network(layer_num, neurons, x_train, ft, sgd, dropout, custom_act);
+                net->weights_dir = weights_dir;
+                return net;
              }),
              py::arg("layer_num"), py::arg("neurons_in_layers"), py::arg("initial_input"),
-             py::arg("function_type") = FunctionType::RELU,
              py::arg("optimizer"),
              py::arg("dropout_rate") = 0.0,
-             py::arg("custom_activation") = nullptr,
-             py::keep_alive<1, 6>(),
+             py::arg("function_type") = FunctionType::RELU,
+             py::arg("activation") = nullptr,
+             py::arg("weights_dir") = "",
+             py::keep_alive<1, 5>(),
              py::keep_alive<1, 8>())
         .def("train_loop",    &Network::train_loop,
              py::arg("epochs"), py::arg("train_labels"), py::arg("batch_size"))
         .def("accuracy",      &Network::test_accuracy,
              py::arg("x_test"), py::arg("y_test"))
+        .def("predict",       &Network::predict,
+             py::arg("x_test"))
         .def("save_weights",  &Network::save_weights,
              py::arg("path") = "weights.json")
         .def("load_weights",  &Network::load_weights,

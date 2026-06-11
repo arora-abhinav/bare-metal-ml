@@ -57,7 +57,8 @@ public:
 //before it propagates it to its own children.
 class TopologicalSort {
 public:
-    void backprop(ElemPtr root_node) {
+    //Kahn's topological sort — returns the sorted node list without running back()
+    vector<ElemPtr> topological_sort(ElemPtr root_node) {
         map<Element*, int>     num_dependencies;
         map<Element*, ElemPtr> node_ptrs;
 
@@ -80,13 +81,15 @@ public:
             if (count == 0)
                 q.push_back(ptr);
 
-        vector<Element*> final_res;
+        //Store ElemPtr so sorted_graph keeps nodes alive across batches —
+        //raw Element* would dangle once feedforward recreates intermediate nodes
+        vector<ElemPtr> final_res;
         while (!q.empty()) {
             int q_len = q.size();
             for (int i = 0; i < q_len; i++) {
                 Element* node = q.back();
                 q.pop_back();
-                final_res.push_back(node);
+                final_res.push_back(node_ptrs[node]);
                 for (auto& c : node->children) {
                     num_dependencies[c.get()]--;
                     if (num_dependencies[c.get()] == 0)
@@ -95,7 +98,12 @@ public:
             }
         }
 
-        for (auto* node : final_res)
+        return final_res;
+    }
+
+    //Runs back() on a pre-sorted node list — call this with the cached result of topological_sort()
+    void backprop(vector<ElemPtr>& final_res) {
+        for (auto& node : final_res)
             node->back();
     }
 };
@@ -258,9 +266,14 @@ public:
     ScalarPtr rsub(double other) { return static_pointer_cast<Scalar>(make_shared<Scalar>(other)->sub(shared_from_this())); }
     ScalarPtr rdiv(double other) { return static_pointer_cast<Scalar>(make_shared<Scalar>(other)->truediv(shared_from_this())); }
 
-    void backprop() {
-        TopologicalSort topo;
-        topo.backprop(shared_from_this());
+    vector<ElemPtr> topo_sort() {
+        TopologicalSort ts;
+        return ts.topological_sort(shared_from_this());
+    }
+
+    void backprop(vector<ElemPtr>& sorted_graph) {
+        TopologicalSort ts;
+        ts.backprop(sorted_graph);
     }
 };
 
@@ -543,10 +556,13 @@ public:
         return res;
     }
 
-    //Kahn's topological sort flattens the graph into a list that can be traversed in order
-    //so back() is called in the correct sequence.
-    void backprop() {
-        TopologicalSort topo;
-        topo.backprop(shared_from_this());
+    vector<ElemPtr> topo_sort() {
+        TopologicalSort ts;
+        return ts.topological_sort(shared_from_this());
+    }
+
+    void backprop(vector<ElemPtr>& sorted_graph) {
+        TopologicalSort ts;
+        ts.backprop(sorted_graph);
     }
 };

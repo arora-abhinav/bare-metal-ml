@@ -2,6 +2,11 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#else
+#include <cblas.h>
+#endif
 
 using namespace std;
 typedef vector<double> Vec;
@@ -115,11 +120,19 @@ Mat matrix_with_matrix_multiplication(const Mat& A, const Mat& B) {
     int M = A.size();
     int K = A[0].size();
     int N = B[0].size();
-    Mat res(M, Vec(N, 0.0));
+    vector<double> a(M * K), b(K * N), c(M * N, 0.0);
+    for (int i = 0; i < M; i++)
+        for (int j = 0; j < K; j++)
+            a[i * K + j] = A[i][j];
+    for (int i = 0; i < K; i++)
+        for (int j = 0; j < N; j++)
+            b[i * N + j] = B[i][j];
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                M, N, K, 1.0, a.data(), K, b.data(), N, 0.0, c.data(), N);
+    Mat res(M, Vec(N));
     for (int i = 0; i < M; i++)
         for (int j = 0; j < N; j++)
-            for (int k = 0; k < K; k++)
-                res[i][j] += A[i][k] * B[k][j];
+            res[i][j] = c[i * N + j];
     return res;
 }
 
@@ -172,5 +185,13 @@ Mat element_wise_roots(Mat matrix, double root_of) {
     for (int row = 0; row < (int)matrix.size(); row++)
         for (int col = 0; col < (int)matrix[0].size(); col++)
             res[row][col] = pow(matrix[row][col], 1.0 / root_of);
+    return res;
+}
+
+Mat ReLU_derivative(Mat matrix) {
+    Mat res(matrix.size(), Vec(matrix[0].size(), 0.0));
+    for (int row = 0; row < (int)matrix.size(); row++)
+        for (int col = 0; col < (int)matrix[0].size(); col++)
+            res[row][col] = matrix[row][col] > 0 ? 1.0 : 0.0;
     return res;
 }

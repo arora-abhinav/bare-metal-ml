@@ -4,6 +4,8 @@
 #include <cmath>
 #include <map>
 #include <stdexcept>
+#include <fstream>
+#include <iomanip>
 #include "linalg.hpp"
 
 class GDA {
@@ -62,7 +64,70 @@ public:
         return (double)correct / y_test.size() * 100.0;
     }
 
+    void save(const string& path = "gda.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"positive_class\":\"" << positive_class << "\",";
+        f << "\"negative_class\":\"" << negative_class << "\",";
+        f << "\"dimension\":" << dimension << ",";
+        f << "\"phi\":" << phi << ",";
+        f << "\"mu_zero\":[";
+        for (int i = 0; i < (int)mu_zero.size(); i++) { if (i) f << ","; f << mu_zero[i]; }
+        f << "],\"mu_one\":[";
+        for (int i = 0; i < (int)mu_one.size(); i++) { if (i) f << ","; f << mu_one[i]; }
+        f << "],\"covariance\":[";
+        for (int i = 0; i < (int)covariance.size(); i++) {
+            if (i) f << ",";
+            f << "[";
+            for (int j = 0; j < (int)covariance[i].size(); j++) { if (j) f << ","; f << covariance[i][j]; }
+            f << "]";
+        }
+        f << "]}";
+    }
+
+    void load(const string& path = "gda.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        size_t pos;
+        pos = s.find("\"positive_class\":\"") + 18;
+        positive_class = s.substr(pos, s.find('"', pos) - pos);
+        pos = s.find("\"negative_class\":\"") + 18;
+        negative_class = s.substr(pos, s.find('"', pos) - pos);
+        pos = s.find("\"dimension\":") + 12;
+        dimension = stoi(s.substr(pos));
+        pos = s.find("\"phi\":") + 6;
+        phi = stod(s.substr(pos));
+        pos = s.find("\"mu_zero\":[") + 11;
+        mu_zero = _parse_vec(s, pos);
+        pos = s.find("\"mu_one\":[") + 10;
+        mu_one = _parse_vec(s, pos);
+        pos = s.find("\"covariance\":[") + 14;
+        covariance = _parse_mat(s, pos);
+    }
+
 private:
+    static Vec _parse_vec(const string& s, size_t& pos) {
+        Vec result;
+        pos++; // skip '['
+        while (s[pos] != ']') {
+            if (s[pos] == ',' || s[pos] == ' ') { pos++; continue; }
+            size_t n; result.push_back(stod(s.substr(pos), &n)); pos += n;
+        }
+        pos++;
+        return result;
+    }
+
+    static Mat _parse_mat(const string& s, size_t& pos) {
+        Mat result;
+        pos++; // skip '['
+        while (true) {
+            while (s[pos] == ',' || s[pos] == ' ') pos++;
+            if (s[pos] == ']') { pos++; break; }
+            result.push_back(_parse_vec(s, pos));
+        }
+        return result;
+    }
+
     double compute_phi(const vector<string>& y_train, int n) {
         int count = 0;
         for (int i = 0; i < n; i++)

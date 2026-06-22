@@ -1,5 +1,7 @@
 #pragma once
 #include <vector>
+#include <fstream>
+#include <iomanip>
 
 using namespace std;
 
@@ -52,5 +54,18 @@ public:
         for (int i = 0; i < (int)predictions.size(); i++)
             total += (predictions[i] - y_test[i]) * (predictions[i] - y_test[i]);
         return total / y_test.size();
+    }
+
+    void save(const string& path = "linear_regression.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"theta0\":" << theta0 << ",\"theta1\":" << theta1 << "}";
+    }
+
+    void load(const string& path = "linear_regression.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        theta0 = stod(s.substr(s.find("\"theta0\":") + 9));
+        theta1 = stod(s.substr(s.find("\"theta1\":") + 9));
     }
 };

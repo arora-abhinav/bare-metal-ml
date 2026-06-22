@@ -3,8 +3,8 @@ requires = ["setuptools", "pybind11>=2.10"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bare-metal-ml"
-version = "0.1.0"
+name = "bare-metal-ml-cpp"
+version = "0.2.0"
 description = "Classical ML algorithms and a neural network with custom autograd, implemented from scratch in C++ with a Python API. No NumPy or ML library dependencies."
 requires-python = ">=3.10"
 readme = "README.md"

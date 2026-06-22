@@ -6,6 +6,7 @@
 #include <random>
 #include <functional>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <algorithm>
 #include <numeric>
@@ -574,6 +575,29 @@ public:
         f << "]";
     }
 
+    void save_hyperparams(const string& path = "hyperparams.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"layer_num\":" << number_of_layers << ",\"neurons_in_layers\":[";
+        for (int i = 0; i < (int)neurons_in_layers.size(); i++) { if (i) f << ","; f << neurons_in_layers[i]; }
+        f << "],\"dropout_rate\":" << dropout_rate;
+        if (optimizer) {
+            f << ",\"learning_rate\":" << optimizer->learning_rate;
+            f << ",\"optimizer\":\"" << (dynamic_cast<Adam*>(optimizer) ? "Adam" : "SGD") << "\"";
+        }
+        f << "}";
+    }
+
+    void load_hyperparams(const string& path = "hyperparams.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        dropout_rate = stod(s.substr(s.find("\"dropout_rate\":") + 15));
+        if (optimizer) {
+            size_t pos = s.find("\"learning_rate\":");
+            if (pos != string::npos) optimizer->learning_rate = stod(s.substr(pos + 16));
+        }
+    }
+
     //Reads a file written by save_weights and restores each layer's weights and biases.
     //The network architecture must match the saved one.
     void load_weights(const string& path = "") {
@@ -594,6 +618,7 @@ public:
 
 private:
     static void _write_mat(ofstream& f, const Mat& m) {
+        f << setprecision(17);
         f << "[";
         for (int i = 0; i < (int)m.size(); i++) {
             f << "[";

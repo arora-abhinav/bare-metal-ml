@@ -8,6 +8,8 @@
 #include <tuple>
 #include <memory>
 #include <limits>
+#include <fstream>
+#include <iomanip>
 
 using namespace std;
 
@@ -101,6 +103,55 @@ public:
         return (double)correct / y_test.size() * 100.0;
     }
 
+    void save(const string& path = "knn.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"k\":" << k << ",\"metric\":\"" << metric << "\",\"x_train\":[";
+        for (int i = 0; i < (int)x_train.size(); i++) {
+            if (i) f << ",";
+            f << "[";
+            for (int j = 0; j < (int)x_train[i].size(); j++) { if (j) f << ","; f << x_train[i][j]; }
+            f << "]";
+        }
+        f << "],\"y_train\":[";
+        for (int i = 0; i < (int)y_train.size(); i++) { if (i) f << ","; f << "\"" << y_train[i] << "\""; }
+        f << "]}";
+    }
+
+    void load(const string& path = "knn.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        k = stoi(s.substr(s.find("\"k\":") + 4));
+        size_t mp = s.find("\"metric\":\"") + 10;
+        metric = s.substr(mp, s.find('"', mp) - mp);
+        size_t pos = s.find("\"x_train\":[") + 11;
+        x_train.clear();
+        pos++; // skip first '['
+        while (true) {
+            while (pos < s.size() && (s[pos] == ',' || s[pos] == ' ')) pos++;
+            if (s[pos] == ']') { pos++; break; }
+            vector<double> row;
+            pos++; // skip '['
+            while (s[pos] != ']') {
+                if (s[pos] == ',' || s[pos] == ' ') { pos++; continue; }
+                size_t n; row.push_back(stod(s.substr(pos), &n)); pos += n;
+            }
+            pos++; // skip ']'
+            x_train.push_back(row);
+        }
+        pos = s.find("\"y_train\":[") + 11;
+        y_train.clear();
+        while (s[pos] != ']') {
+            if (s[pos] == ',' || s[pos] == ' ') { pos++; continue; }
+            if (s[pos] == '"') {
+                pos++;
+                size_t end = s.find('"', pos);
+                y_train.push_back(s.substr(pos, end - pos));
+                pos = end + 1;
+            } else pos++;
+        }
+    }
+
 private:
     vector<vector<double>> x_train;
     vector<string> y_train;
@@ -135,12 +186,14 @@ class KDTree {
 public:
     KDNode* root = nullptr;
     vector<string> y_train;
+    vector<vector<double>> x_train_data;
     int n_features = 0;
 
     KDTree() {}
     ~KDTree() { delete root; }
 
     void fit(const vector<vector<double>>& x_train, const vector<string>& labels) {
+        x_train_data = x_train;
         y_train = labels;
         n_features = x_train[0].size();
         vector<pair<vector<double>, int>> examples;
@@ -186,6 +239,57 @@ public:
             if (predictions[i] == y_test[i])
                 correct++;
         return (double)correct / y_test.size() * 100.0;
+    }
+
+    void save(const string& path = "kdtree.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"x_train\":[";
+        for (int i = 0; i < (int)x_train_data.size(); i++) {
+            if (i) f << ",";
+            f << "[";
+            for (int j = 0; j < (int)x_train_data[i].size(); j++) { if (j) f << ","; f << x_train_data[i][j]; }
+            f << "]";
+        }
+        f << "],\"y_train\":[";
+        for (int i = 0; i < (int)y_train.size(); i++) { if (i) f << ","; f << "\"" << y_train[i] << "\""; }
+        f << "]}";
+    }
+
+    void load(const string& path = "kdtree.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        // parse x_train
+        size_t pos = s.find("\"x_train\":[") + 11;
+        vector<vector<double>> xt;
+        pos++; // skip first '['
+        while (true) {
+            while (pos < s.size() && (s[pos] == ',' || s[pos] == ' ')) pos++;
+            if (s[pos] == ']') { pos++; break; }
+            vector<double> row;
+            pos++; // skip '['
+            while (s[pos] != ']') {
+                if (s[pos] == ',' || s[pos] == ' ') { pos++; continue; }
+                size_t n; row.push_back(stod(s.substr(pos), &n)); pos += n;
+            }
+            pos++;
+            xt.push_back(row);
+        }
+        // parse y_train
+        pos = s.find("\"y_train\":[") + 11;
+        vector<string> yt;
+        while (s[pos] != ']') {
+            if (s[pos] == ',' || s[pos] == ' ') { pos++; continue; }
+            if (s[pos] == '"') {
+                pos++;
+                size_t end = s.find('"', pos);
+                yt.push_back(s.substr(pos, end - pos));
+                pos = end + 1;
+            } else pos++;
+        }
+        // rebuild the tree from loaded data
+        delete root; root = nullptr;
+        fit(xt, yt);
     }
 
 private:

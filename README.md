@@ -479,6 +479,66 @@ All three share the same interface: `fit`, `predict_one`, `predict`, `accuracy`.
 
 ---
 
+## Saving and Loading Models
+
+Every model supports `save(path)` and `load(path)`. The file format is JSON so it is human-readable and easy to inspect.
+
+### Neural Network
+
+```python
+# Weights and biases (one layer per entry)
+net.save_weights("weights.json")
+net.load_weights("weights.json")
+
+# Hyperparameters: layer_num, neurons_in_layers, dropout_rate, optimizer, learning_rate
+net.save_hyperparams("hyperparams.json")
+net.load_hyperparams("hyperparams.json")   # restores dropout_rate and optimizer learning_rate
+```
+
+### Classical Models
+
+```python
+# Linear Regression — saves theta0 and theta1
+lr = LinearRegression()
+lr.fit(x_train, y_train)
+lr.save("lr.json")
+
+lr2 = LinearRegression()
+lr2.load("lr.json")
+lr2.predict(x_test)   # ready to use immediately
+
+# Logistic Regression — saves positive_class and all thetas
+logr.save("logr.json")
+logr2 = LogisticRegression(); logr2.load("logr.json")
+
+# GDA — saves phi, mu_zero, mu_one, covariance, class names, dimension
+gda.save("gda.json")
+gda2 = GDA(); gda2.load("gda.json")
+
+# Gaussian Naive Bayes — saves class statistics (means and variances per feature per class)
+gnb.save("gnb.json")
+gnb2 = GaussianNaiveBayes(); gnb2.load("gnb.json")
+
+# Bernoulli / Multinomial Naive Bayes — saves vocab mapping and class-conditional probabilities
+bnb.save("bnb.json")
+bnb2 = BernoulliNaiveBayes(vocab_size=1000); bnb2.load("bnb.json")
+
+mnb.save("mnb.json")
+mnb2 = MultinomialNaiveBayes(vocab_size=1000); mnb2.load("mnb.json")
+
+# KNN — saves k, metric, and the entire training set
+knn.save("knn.json")
+knn2 = KNN(); knn2.load("knn.json")
+
+# KDTree — saves training data and rebuilds the tree on load
+kdt.save("kdt.json")
+kdt2 = KDTree(); kdt2.load("kdt.json")
+```
+
+All paths default to a sensible filename in the current directory if omitted.
+
+---
+
 ## Linear Algebra Utilities
 
 All functions are C++ and available under the `bare_metal_ml.linalg` namespace.
@@ -553,7 +613,13 @@ The `notebooks/` directory contains the original Python reference implementation
 
 ## Benchmarks
 
-Benchmarked on MNIST (48 000 train / 12 000 test), architecture `784 → 128 → 64 → 10`, Adam lr=0.01, dropout=0.2, 10 epochs, batch size 64:
+All benchmarks compare bare-metal-ml against the equivalent scikit-learn or PyTorch/Keras implementation on identical data, splits, and hyperparameters.
+
+---
+
+### Neural Network — MNIST
+
+Architecture `784 → 128 → 64 → 10`, Adam lr=0.01, dropout=0.2, 10 epochs, batch size 64 (48 000 train / 12 000 test):
 
 | Model | Accuracy | Time |
 |---|---|---|
@@ -562,6 +628,106 @@ Benchmarked on MNIST (48 000 train / 12 000 test), architecture `784 → 128 →
 | Keras (PyTorch backend) | ~96% | ~49s |
 
 Accuracy is on par with PyTorch and Keras. The speed gap comes from the Python↔C++ boundary: each matrix operation in the autograd graph is a separate pybind11 dispatch. The flexibility of the autograd design (arbitrary activation functions, custom graph topologies) is the deliberate trade-off.
+
+---
+
+### Gaussian Discriminant Analysis — WDBC Breast Cancer
+
+Binary classification (malignant vs. benign), 569 samples, 30 features, 80/20 split:
+
+| Model | Accuracy | Time |
+|---|---|---|
+| bare-metal-ml GDA | 97.37% | 0.013s |
+| sklearn LinearDiscriminantAnalysis | 97.37% | 0.014s |
+
+Identical accuracy. GDA fits a shared covariance Gaussian per class and classifies by log-likelihood ratio; LDA uses a comparable generative assumption.
+
+---
+
+### K-Nearest Neighbours — Iris
+
+k=5, Euclidean distance, 150 samples, 4 features, 80/20 split:
+
+| Model | Accuracy | Time |
+|---|---|---|
+| bare-metal-ml KNN k=5 | 100.00% | 0.0001s |
+| sklearn KNeighborsClassifier k=5 | 100.00% | 0.0022s |
+
+bare-metal-ml is 20× faster on this dataset because it avoids Python overhead in the inner distance loop (pure C++). Both achieve perfect accuracy on Iris.
+
+---
+
+### KD-Tree — Iris
+
+k=9 majority vote, 80/20 split:
+
+| Model | Accuracy | Time |
+|---|---|---|
+| bare-metal-ml KDTree k=9 | 93.33% | 0.0001s |
+| sklearn KNeighborsClassifier (kd_tree) k=9 | 93.33% | 0.0009s |
+
+Identical accuracy. The bare-metal-ml KD-Tree uses the same median-split construction and backtracking search as sklearn's implementation.
+
+---
+
+### Logistic Regression — Iris (binary)
+
+Setosa vs. rest, gradient descent lr=0.001, 1000 iterations, 100 train / 50 test:
+
+| Model | Accuracy | Time |
+|---|---|---|
+| bare-metal-ml LogisticRegression | 100.00% | 0.001s |
+| sklearn LogisticRegression (lbfgs) | 100.00% | 0.007s |
+
+Both achieve perfect separation. bare-metal-ml uses vanilla gradient descent; sklearn uses L-BFGS.
+
+---
+
+### Linear Regression — Hours Studied vs Exam Score
+
+25 samples, gradient descent lr=0.01 / 100 iterations vs. sklearn OLS (closed-form):
+
+| Model | MSE | MAE | R² | Time |
+|---|---|---|---|---|
+| bare-metal-ml (GD, 100 iter) | 28.99 | 5.02 | 0.953 | <0.001s |
+| sklearn (OLS) | 28.88 | 4.97 | 0.953 | 0.001s |
+
+Nearly identical fit. OLS finds the exact minimum analytically; gradient descent converges very close with 100 iterations on this small dataset.
+
+---
+
+### Gaussian Naive Bayes — WDBC Breast Cancer
+
+| Model | Accuracy | Time |
+|---|---|---|
+| bare-metal-ml GaussianNB | 94.74% | 0.002s |
+| sklearn GaussianNB | 95.61% | 0.001s |
+
+Small accuracy gap (~1%) due to different handling of near-zero variances. Both use the same Gaussian likelihood formula.
+
+---
+
+### Bernoulli Naive Bayes — SMS Spam
+
+vocab_size=1000, internal tokenisation, 5 572 messages, 80/20 split:
+
+| Model | Accuracy | Time |
+|---|---|---|
+| bare-metal-ml BernoulliNB | 98.39% | 0.311s |
+| sklearn BernoulliNB (CountVectorizer) | 98.21% | 0.037s |
+
+bare-metal-ml achieves **higher accuracy** than sklearn on this dataset. The time difference is due to sklearn's optimised sparse matrix operations; bare-metal-ml tokenises and vectorises entirely in C++.
+
+---
+
+### Multinomial Naive Bayes — SMS Spam
+
+| Model | Accuracy | Time |
+|---|---|---|
+| bare-metal-ml MultinomialNB | 97.94% | 0.312s |
+| sklearn MultinomialNB (CountVectorizer) | 97.76% | 0.047s |
+
+Again bare-metal-ml achieves slightly higher accuracy. Same tokenisation behaviour as Bernoulli.
 
 ---
 

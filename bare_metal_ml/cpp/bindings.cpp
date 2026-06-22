@@ -183,32 +183,51 @@ PYBIND11_MODULE(_cpp, m) {
              py::arg("x_test"), py::arg("y_test"))
         .def("predict",       &Network::predict,
              py::arg("x_test"))
-        .def("save_weights",  &Network::save_weights,
+        .def("save_weights",    &Network::save_weights,
              py::arg("path") = "weights.json")
-        .def("load_weights",  &Network::load_weights,
+        .def("load_weights",    &Network::load_weights,
              py::arg("path") = "weights.json")
+        .def("save_hyperparams",&Network::save_hyperparams,
+             py::arg("path") = "hyperparams.json")
+        .def("load_hyperparams",&Network::load_hyperparams,
+             py::arg("path") = "hyperparams.json")
         .def_readwrite("dropout_rate", &Network::dropout_rate);
 
     // ── GDA ──────────────────────────────────────────────────────────────────
     py::class_<GDA>(m, "GDA")
         .def(py::init<string>(), py::arg("positive_class") = "")
+        .def_readwrite("positive_class", &GDA::positive_class)
+        .def_readwrite("negative_class", &GDA::negative_class)
+        .def_readwrite("phi",            &GDA::phi)
+        .def_readwrite("mu_zero",        &GDA::mu_zero)
+        .def_readwrite("mu_one",         &GDA::mu_one)
+        .def_readwrite("covariance",     &GDA::covariance)
+        .def_readwrite("dimension",      &GDA::dimension)
         .def("fit",         &GDA::fit)
         .def("predict_one", &GDA::predict_one)
         .def("predict",     &GDA::predict)
-        .def("accuracy",    &GDA::accuracy);
+        .def("accuracy",    &GDA::accuracy)
+        .def("save",        &GDA::save, py::arg("path") = "gda.json")
+        .def("load",        &GDA::load, py::arg("path") = "gda.json");
 
     // ── Linear Regression ─────────────────────────────────────────────────────
     py::class_<LinearRegression>(m, "LinearRegression")
         .def(py::init<>())
+        .def_readwrite("theta0", &LinearRegression::theta0)
+        .def_readwrite("theta1", &LinearRegression::theta1)
         .def("fit",     &LinearRegression::fit,
              py::arg("x_train"), py::arg("y_train"),
              py::arg("learning_rate") = 0.01, py::arg("iterations") = 100)
         .def("predict", &LinearRegression::predict)
-        .def("mse",     &LinearRegression::mse);
+        .def("mse",     &LinearRegression::mse)
+        .def("save",    &LinearRegression::save, py::arg("path") = "linear_regression.json")
+        .def("load",    &LinearRegression::load, py::arg("path") = "linear_regression.json");
 
     // ── Logistic Regression ───────────────────────────────────────────────────
     py::class_<LogisticRegression>(m, "LogisticRegression")
         .def(py::init<string>(), py::arg("positive_class") = "")
+        .def_readwrite("positive_class", &LogisticRegression::positive_class)
+        .def_readwrite("thetas",         &LogisticRegression::thetas)
         .def("fit",           &LogisticRegression::fit,
              py::arg("x_train"), py::arg("y_train"),
              py::arg("learning_rate") = 0.001, py::arg("iterations") = 1000)
@@ -216,7 +235,9 @@ PYBIND11_MODULE(_cpp, m) {
         .def("predict",       &LogisticRegression::predict,
              py::arg("x_test"), py::arg("threshold") = 0.5)
         .def("accuracy",      &LogisticRegression::accuracy,
-             py::arg("x_test"), py::arg("y_test"), py::arg("threshold") = 0.5);
+             py::arg("x_test"), py::arg("y_test"), py::arg("threshold") = 0.5)
+        .def("save",          &LogisticRegression::save, py::arg("path") = "logistic_regression.json")
+        .def("load",          &LogisticRegression::load, py::arg("path") = "logistic_regression.json");
 
     // ── KNN ───────────────────────────────────────────────────────────────────
     py::class_<KNN>(m, "KNN")
@@ -225,7 +246,9 @@ PYBIND11_MODULE(_cpp, m) {
         .def("fit",         &KNN::fit)
         .def("predict_one", &KNN::predict_one)
         .def("predict",     &KNN::predict)
-        .def("accuracy",    &KNN::accuracy);
+        .def("accuracy",    &KNN::accuracy)
+        .def("save",        &KNN::save, py::arg("path") = "knn.json")
+        .def("load",        &KNN::load, py::arg("path") = "knn.json");
 
     // ── KDTree ────────────────────────────────────────────────────────────────
     py::class_<KDTree>(m, "KDTree")
@@ -233,7 +256,9 @@ PYBIND11_MODULE(_cpp, m) {
         .def("fit",         &KDTree::fit)
         .def("predict_one", &KDTree::predict_one, py::arg("query"), py::arg("k") = 1)
         .def("predict",     &KDTree::predict,     py::arg("x_test"), py::arg("k") = 1)
-        .def("accuracy",    &KDTree::accuracy,    py::arg("x_test"), py::arg("y_test"), py::arg("k") = 1);
+        .def("accuracy",    &KDTree::accuracy,    py::arg("x_test"), py::arg("y_test"), py::arg("k") = 1)
+        .def("save",        &KDTree::save, py::arg("path") = "kdtree.json")
+        .def("load",        &KDTree::load, py::arg("path") = "kdtree.json");
 
     // ── Gaussian Naive Bayes ──────────────────────────────────────────────────
     py::class_<GaussianNaiveBayes>(m, "GaussianNaiveBayes")
@@ -241,7 +266,9 @@ PYBIND11_MODULE(_cpp, m) {
         .def("fit",         &GaussianNaiveBayes::fit)
         .def("predict_one", &GaussianNaiveBayes::predict_one)
         .def("predict",     &GaussianNaiveBayes::predict)
-        .def("accuracy",    &GaussianNaiveBayes::accuracy);
+        .def("accuracy",    &GaussianNaiveBayes::accuracy)
+        .def("save",        &GaussianNaiveBayes::save, py::arg("path") = "gaussian_nb.json")
+        .def("load",        &GaussianNaiveBayes::load, py::arg("path") = "gaussian_nb.json");
 
     // ── Bernoulli Naive Bayes ─────────────────────────────────────────────────
     py::class_<BernoulliNaiveBayes>(m, "BernoulliNaiveBayes")
@@ -249,7 +276,9 @@ PYBIND11_MODULE(_cpp, m) {
         .def("fit",         &BernoulliNaiveBayes::fit)
         .def("predict_one", &BernoulliNaiveBayes::predict_one)
         .def("predict",     &BernoulliNaiveBayes::predict)
-        .def("accuracy",    &BernoulliNaiveBayes::accuracy);
+        .def("accuracy",    &BernoulliNaiveBayes::accuracy)
+        .def("save",        &BernoulliNaiveBayes::save, py::arg("path") = "bernoulli_nb.json")
+        .def("load",        &BernoulliNaiveBayes::load, py::arg("path") = "bernoulli_nb.json");
 
     // ── Multinomial Naive Bayes ───────────────────────────────────────────────
     py::class_<MultinomialNaiveBayes>(m, "MultinomialNaiveBayes")
@@ -257,5 +286,7 @@ PYBIND11_MODULE(_cpp, m) {
         .def("fit",         &MultinomialNaiveBayes::fit)
         .def("predict_one", &MultinomialNaiveBayes::predict_one)
         .def("predict",     &MultinomialNaiveBayes::predict)
-        .def("accuracy",    &MultinomialNaiveBayes::accuracy);
+        .def("accuracy",    &MultinomialNaiveBayes::accuracy)
+        .def("save",        &MultinomialNaiveBayes::save, py::arg("path") = "multinomial_nb.json")
+        .def("load",        &MultinomialNaiveBayes::load, py::arg("path") = "multinomial_nb.json");
 }

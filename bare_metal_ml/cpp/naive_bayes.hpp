@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <sstream>
 #include <cctype>
+#include <fstream>
+#include <iomanip>
 
 using namespace std;
 
@@ -136,6 +138,59 @@ public:
         return (double)correct / y_test.size() * 100.0;
     }
 
+    void save(const string& path = "gaussian_nb.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"n\":" << n << ",";
+        f << "\"class_ratio\":{";
+        bool first = true;
+        for (auto& kv : class_ratio) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first << "\":" << kv.second;
+        }
+        f << "},\"class_numbering\":{";
+        first = true;
+        for (auto& kv : class_numbering) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first << "\":" << kv.second;
+        }
+        f << "},\"mean\":{";
+        first = true;
+        for (auto& kv : mean_dict) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first.first << "|" << kv.first.second << "\":" << kv.second;
+        }
+        f << "},\"variance\":{";
+        first = true;
+        for (auto& kv : variance_dict) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first.first << "|" << kv.first.second << "\":" << kv.second;
+        }
+        f << "}}";
+    }
+
+    void load(const string& path = "gaussian_nb.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        n = stoi(s.substr(s.find("\"n\":") + 4));
+        auto [cr_s, cr_e] = _obj_range(s, "class_ratio");
+        class_ratio = _parse_int_map(s, cr_s, cr_e);
+        auto [cn_s, cn_e] = _obj_range(s, "class_numbering");
+        class_numbering = _parse_int_map(s, cn_s, cn_e);
+        auto [m_s, m_e] = _obj_range(s, "mean");
+        mean_dict.clear();
+        for (auto& kv : _parse_dbl_map(s, m_s, m_e)) {
+            size_t sep = kv.first.rfind('|');
+            mean_dict[{kv.first.substr(0, sep), stoi(kv.first.substr(sep + 1))}] = kv.second;
+        }
+        auto [v_s, v_e] = _obj_range(s, "variance");
+        variance_dict.clear();
+        for (auto& kv : _parse_dbl_map(s, v_s, v_e)) {
+            size_t sep = kv.first.rfind('|');
+            variance_dict[{kv.first.substr(0, sep), stoi(kv.first.substr(sep + 1))}] = kv.second;
+        }
+    }
+
 private:
     int n;
     map<string, int> class_ratio;
@@ -182,6 +237,40 @@ private:
         variance = max(variance, 1e-10);
         double prob = (1.0 / sqrt(2 * M_PI * variance)) * exp(-((x - mean) * (x - mean)) / (2 * variance));
         return max(prob, 1e-300);
+    }
+
+    static pair<size_t,size_t> _obj_range(const string& s, const string& key) {
+        string pat = "\"" + key + "\":{";
+        size_t open = s.find(pat) + pat.size() - 1;
+        int depth = 1; size_t i = open + 1;
+        while (i < s.size() && depth > 0) { if (s[i]=='{') depth++; else if (s[i]=='}') depth--; i++; }
+        return {open + 1, i - 1};
+    }
+
+    static map<string,int> _parse_int_map(const string& s, size_t st, size_t en) {
+        map<string,int> res;
+        size_t pos = st;
+        while (pos < en) {
+            size_t ks = s.find('"', pos); if (ks >= en) break; ks++;
+            size_t ke = s.find('"', ks);  if (ke >= en) break;
+            string key = s.substr(ks, ke - ks);
+            pos = s.find(':', ke) + 1;
+            size_t n; res[key] = stoi(s.substr(pos), &n); pos += n;
+        }
+        return res;
+    }
+
+    static map<string,double> _parse_dbl_map(const string& s, size_t st, size_t en) {
+        map<string,double> res;
+        size_t pos = st;
+        while (pos < en) {
+            size_t ks = s.find('"', pos); if (ks >= en) break; ks++;
+            size_t ke = s.find('"', ks);  if (ke >= en) break;
+            string key = s.substr(ks, ke - ks);
+            pos = s.find(':', ke) + 1;
+            size_t n; res[key] = stod(s.substr(pos), &n); pos += n;
+        }
+        return res;
     }
 };
 
@@ -239,6 +328,49 @@ public:
         return (double)correct / y_test.size() * 100.0;
     }
 
+    void save(const string& path = "bernoulli_nb.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"vocab_size\":" << vocab_size << ",\"n\":" << n << ",";
+        f << "\"vocab\":{";
+        bool first = true;
+        for (auto& kv : vocab) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first << "\":" << kv.second;
+        }
+        f << "},\"class_ratio\":{";
+        first = true;
+        for (auto& kv : class_ratio) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first << "\":" << kv.second;
+        }
+        f << "},\"phi\":{";
+        first = true;
+        for (auto& kv : phi_dict) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first.first << "|" << kv.first.second << "\":" << kv.second;
+        }
+        f << "}}";
+    }
+
+    void load(const string& path = "bernoulli_nb.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        vocab_size = stoi(s.substr(s.find("\"vocab_size\":") + 13));
+        n = stoi(s.substr(s.find("\"n\":") + 4));
+        auto [v_s, v_e] = _bnb_obj_range(s, "vocab");
+        vocab.clear();
+        for (auto& kv : _bnb_int_map(s, v_s, v_e)) vocab[kv.first] = kv.second;
+        auto [cr_s, cr_e] = _bnb_obj_range(s, "class_ratio");
+        class_ratio = _bnb_int_map(s, cr_s, cr_e);
+        auto [p_s, p_e] = _bnb_obj_range(s, "phi");
+        phi_dict.clear();
+        for (auto& kv : _bnb_dbl_map(s, p_s, p_e)) {
+            size_t sep = kv.first.rfind('|');
+            phi_dict[{kv.first.substr(0, sep), stoi(kv.first.substr(sep + 1))}] = kv.second;
+        }
+    }
+
 private:
     int n;
     unordered_map<string, int> vocab;
@@ -260,6 +392,40 @@ private:
 
     double bernoulli_dist(int x, double phi) {
         return pow(phi, x) * pow(1.0 - phi, 1 - x);
+    }
+
+    static pair<size_t,size_t> _bnb_obj_range(const string& s, const string& key) {
+        string pat = "\"" + key + "\":{";
+        size_t open = s.find(pat) + pat.size() - 1;
+        int depth = 1; size_t i = open + 1;
+        while (i < s.size() && depth > 0) { if (s[i]=='{') depth++; else if (s[i]=='}') depth--; i++; }
+        return {open + 1, i - 1};
+    }
+
+    static map<string,int> _bnb_int_map(const string& s, size_t st, size_t en) {
+        map<string,int> res;
+        size_t pos = st;
+        while (pos < en) {
+            size_t ks = s.find('"', pos); if (ks >= en) break; ks++;
+            size_t ke = s.find('"', ks);  if (ke >= en) break;
+            string key = s.substr(ks, ke - ks);
+            pos = s.find(':', ke) + 1;
+            size_t n; res[key] = stoi(s.substr(pos), &n); pos += n;
+        }
+        return res;
+    }
+
+    static map<string,double> _bnb_dbl_map(const string& s, size_t st, size_t en) {
+        map<string,double> res;
+        size_t pos = st;
+        while (pos < en) {
+            size_t ks = s.find('"', pos); if (ks >= en) break; ks++;
+            size_t ke = s.find('"', ks);  if (ke >= en) break;
+            string key = s.substr(ks, ke - ks);
+            pos = s.find(':', ke) + 1;
+            size_t n; res[key] = stod(s.substr(pos), &n); pos += n;
+        }
+        return res;
     }
 };
 
@@ -317,6 +483,49 @@ public:
         return (double)correct / y_test.size() * 100.0;
     }
 
+    void save(const string& path = "multinomial_nb.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"vocab_size\":" << vocab_size << ",\"n\":" << n << ",";
+        f << "\"vocab\":{";
+        bool first = true;
+        for (auto& kv : vocab) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first << "\":" << kv.second;
+        }
+        f << "},\"class_ratio\":{";
+        first = true;
+        for (auto& kv : class_ratio) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first << "\":" << kv.second;
+        }
+        f << "},\"phi\":{";
+        first = true;
+        for (auto& kv : phi_dict) {
+            if (!first) f << ","; first = false;
+            f << "\"" << kv.first.first << "|" << kv.first.second << "\":" << kv.second;
+        }
+        f << "}}";
+    }
+
+    void load(const string& path = "multinomial_nb.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        vocab_size = stoi(s.substr(s.find("\"vocab_size\":") + 13));
+        n = stoi(s.substr(s.find("\"n\":") + 4));
+        auto [v_s, v_e] = _mnb_obj_range(s, "vocab");
+        vocab.clear();
+        for (auto& kv : _mnb_int_map(s, v_s, v_e)) vocab[kv.first] = kv.second;
+        auto [cr_s, cr_e] = _mnb_obj_range(s, "class_ratio");
+        class_ratio = _mnb_int_map(s, cr_s, cr_e);
+        auto [p_s, p_e] = _mnb_obj_range(s, "phi");
+        phi_dict.clear();
+        for (auto& kv : _mnb_dbl_map(s, p_s, p_e)) {
+            size_t sep = kv.first.rfind('|');
+            phi_dict[{kv.first.substr(0, sep), stoi(kv.first.substr(sep + 1))}] = kv.second;
+        }
+    }
+
 private:
     int n;
     unordered_map<string, int> vocab;
@@ -344,5 +553,39 @@ private:
                 phi_dict[{element.first, feature_number}] = (double)(element.second + 1) / (total_words[element.first] + vocab_size);
             feature_number++;
         }
+    }
+
+    static pair<size_t,size_t> _mnb_obj_range(const string& s, const string& key) {
+        string pat = "\"" + key + "\":{";
+        size_t open = s.find(pat) + pat.size() - 1;
+        int depth = 1; size_t i = open + 1;
+        while (i < s.size() && depth > 0) { if (s[i]=='{') depth++; else if (s[i]=='}') depth--; i++; }
+        return {open + 1, i - 1};
+    }
+
+    static map<string,int> _mnb_int_map(const string& s, size_t st, size_t en) {
+        map<string,int> res;
+        size_t pos = st;
+        while (pos < en) {
+            size_t ks = s.find('"', pos); if (ks >= en) break; ks++;
+            size_t ke = s.find('"', ks);  if (ke >= en) break;
+            string key = s.substr(ks, ke - ks);
+            pos = s.find(':', ke) + 1;
+            size_t n; res[key] = stoi(s.substr(pos), &n); pos += n;
+        }
+        return res;
+    }
+
+    static map<string,double> _mnb_dbl_map(const string& s, size_t st, size_t en) {
+        map<string,double> res;
+        size_t pos = st;
+        while (pos < en) {
+            size_t ks = s.find('"', pos); if (ks >= en) break; ks++;
+            size_t ke = s.find('"', ks);  if (ke >= en) break;
+            string key = s.substr(ks, ke - ks);
+            pos = s.find(':', ke) + 1;
+            size_t n; res[key] = stod(s.substr(pos), &n); pos += n;
+        }
+        return res;
     }
 };

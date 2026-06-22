@@ -3,6 +3,8 @@
 #include <string>
 #include <set>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 
 using namespace std;
 
@@ -77,5 +79,29 @@ public:
                 correct++;
         }
         return (double)correct / y_test.size() * 100.0;
+    }
+
+    void save(const string& path = "logistic_regression.json") const {
+        ofstream f(path);
+        f << setprecision(17);
+        f << "{\"positive_class\":\"" << positive_class << "\",\"thetas\":[";
+        for (int i = 0; i < (int)thetas.size(); i++) {
+            if (i > 0) f << ",";
+            f << thetas[i];
+        }
+        f << "]}";
+    }
+
+    void load(const string& path = "logistic_regression.json") {
+        ifstream f(path);
+        string s((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
+        size_t pos = s.find("\"positive_class\":\"") + 18;
+        positive_class = s.substr(pos, s.find('"', pos) - pos);
+        pos = s.find("\"thetas\":[") + 10;
+        thetas.clear();
+        while (s[pos] != ']') {
+            if (s[pos] == ',' || s[pos] == ' ') { pos++; continue; }
+            size_t n; thetas.push_back(stod(s.substr(pos), &n)); pos += n;
+        }
     }
 };
